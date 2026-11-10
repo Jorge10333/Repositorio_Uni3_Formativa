@@ -35,7 +35,7 @@ def login():  # Define la función que verifica las credenciales del usuario
     with open(ARCHIVO, encoding="utf-8") as f:  # Abre el archivo de usuarios en modo lectura
         datos = json.load(f)  # Lee el JSON y lo convierte en un diccionario
     for _ in range(3):  # Repite el proceso hasta 3 veces (3 intentos)
-        usuario = input("Usuario: ").strip()  # Pide el usuario y le quita los espacios sobrantes
+        usuario = validar(input("Usuario: "), r"[A-Za-z0-9_]{3,20}") or ""  # Pide el usuario, lo valida con el patrón y, si es inválido, queda vacío
         clave = getpass.getpass("Contraseña: ")  # Pide la contraseña sin mostrarla en pantalla
         hash_ingresado = hashear(clave, bytes.fromhex(datos["salt"]))  # Cifra la contraseña ingresada usando el salt guardado
         if usuario == datos["usuario"] and hmac.compare_digest(hash_ingresado, datos["hash"]):  # Comprueba que el usuario coincida y que los hashes sean iguales
