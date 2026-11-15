@@ -1,13 +1,9 @@
-from views.utils import leer_numero, confirmar  # Importa utilidades de lectura numérica y confirmación
-from models.reporte_clima import ReporteClima  # Importa el modelo ReporteClima
+from views.utils import leer_numero, leer_id_opcional, confirmar
+from models.reporte_clima import ReporteClima
 
 
-class ClimaView:  # Define la vista de consola para el módulo de consumo de API meteorológica
-    """
-    Vista de consola para el módulo de Monitoreo Climático (Open-Meteo API).
-    """
-
-    @staticmethod  # Muestra las opciones del módulo de clima
+class ClimaView:  # Interfaz de consola para Monitoreo Climático en Terreno
+    @staticmethod
     def mostrar_menu() -> int:
         print("\n" + "=" * 54)
         print("     MÓDULO DE CLIMA Y PROYECTOS EN TERRENO (API)")
@@ -19,54 +15,53 @@ class ClimaView:  # Define la vista de consola para el módulo de consumo de API
         print("5.- Diagnosticar Conexión con API Open-Meteo")
         print("0.- Volver al Menú Principal")
         print("=" * 54)
-        return leer_numero("Seleccione una opción: ")  # Valida entrada entera
+        return leer_numero("Seleccione una opción: ")
 
-    @staticmethod  # Solicita al usuario el nombre de la ciudad a consultar
+    @staticmethod
     def pedir_ciudad() -> str:
         print("\n--- CONSULTA METEOROLÓGICA (OPEN-METEO) ---")
-        return input("Ingrese el nombre de la ciudad (ej. 'Concepcion', 'Santiago'): ").strip()
+        return input("Ingrese el nombre de la ciudad (ej. 'Concepción', 'Chillán'): ").strip()
 
-    @staticmethod  # Imprime en consola los datos meteorológicos recibidos de la API
-    def mostrar_reporte_actual(reporte: ReporteClima) -> None:
-        print("\n" + "-" * 48)
+    @staticmethod
+    def mostrar_reporte_actual(reporte: ReporteClima) -> None:  # Muestra métricas y recomendación operativa
+        decision, detalle = reporte.evaluar_condiciones()
+        print("\n" + "-" * 54)
+        print(f"  Origen Dato      : {reporte.origen.upper()}")
         print(f"  Ciudad           : {reporte.ciudad} ({reporte.pais})")
+        print(f"  Estado Tiempo    : {reporte.descripcion_clima}")
         print(f"  Temperatura      : {reporte.temperatura:.1f} °C")
+        print(f"  Humedad Relativa : {reporte.humedad:.0f} %")
         print(f"  Velocidad Viento : {reporte.velocidad_viento:.1f} km/h")
+        print(f"  Recomendación    : [{decision}] {detalle}")
         print(f"  Fecha Consulta   : {reporte.fecha_consulta}")
-        print("-" * 48)
+        print("-" * 54)
 
-    @staticmethod  # Solicita opcionalmente el ID de un proyecto para vincular el reporte
+    @staticmethod
     def pedir_id_proyecto_opcional() -> int | None:
-        resp = input("ID del proyecto a asociar (presione Enter para guardar sin proyecto): ").strip()
-        if not resp:  # Si el usuario presionó Enter sin escribir nada
-            return None  # Guarda sin proyecto asociado
-        if resp.isdigit():  # Si escribió solo números
-            return int(resp)  # Retorna el ID como entero
-        print("ID no numérico; se guardará como consulta general sin proyecto asociado.")
-        return None  # Si escribió letras, evita error y guarda sin proyecto
+        return leer_id_opcional("ID del proyecto a asociar (Enter para guardar sin proyecto): ")
 
-    @staticmethod  # Pide confirmación antes de insertar el reporte en SQLite
+    @staticmethod
     def confirmar_guardado() -> bool:
-        return confirmar("¿Desea guardar este reporte climático en la base de datos SQLite?")
+        return confirmar("¿Desea guardar este reporte climático en la base de datos?")
 
-    @staticmethod  # Pide el ID de proyecto para filtrar su historial meteorológico
+    @staticmethod
     def pedir_id_proyecto_busqueda() -> int:
         return leer_numero("Ingrese el ID del proyecto a consultar: ")
 
-    @staticmethod  # Muestra la lista de reportes guardados en la base de datos
+    @staticmethod
     def mostrar_historial(reportes: list[ReporteClima]) -> None:
-        if not reportes:  # Si no hay registros en SQLite
+        if not reportes:
             print("\n[INFO] No hay reportes climáticos registrados.")
             return
         print(f"\n--- HISTORIAL DE REPORTES CLIMÁTICOS ({len(reportes)}) ---")
-        for r in reportes:  # Imprime cada reporte formateado
+        for r in reportes:
             print(f"• {r}")
         print("-" * 54)
 
-    @staticmethod  # Muestra mensajes informativos del módulo clima
+    @staticmethod
     def mostrar_mensaje(mensaje: str) -> None:
         print(f"\n[CLIMA] {mensaje}")
 
-    @staticmethod  # Muestra mensajes de error del módulo clima
+    @staticmethod
     def mostrar_error(error: str) -> None:
         print(f"\n[ERROR] {error}")

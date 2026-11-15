@@ -1,120 +1,121 @@
-from config.settings import Settings  # Importa el límite máximo de intentos desde Settings
-from models.usuario import Usuario  # Importa el modelo Usuario para validaciones y hash
-from models.usuario_dao import UsuarioDAO  # Importa el DAO para consultar/guardar usuarios en SQLite
-from views.auth_view import AuthView  # Importa la vista de autenticación
+import time  # Iguala tiempos de respuesta cuando el usuario no existe (evita enumeración de cuentas)
+from config.settings import Settings  # Lee el máximo de intentos y minutos de bloqueo
+from controllers.seguridad import exigir_rol  # Restringe la gestión de cuentas solo a Administradores
+from models.empleado_dao import EmpleadoDAO  # Verifica que el empleado asociado exista en BD
+from models.usuario import Usuario  # Modelo con validación de política y hash scrypt
+from models.usuario_dao import UsuarioDAO  # Persistencia de usuarios y bloqueo en SQLite
+from views.auth_view import AuthView  # Interfaz de consola para login y usuarios
 
 
-class AuthController:  # Define el controlador que orquesta el inicio de sesión y gestión de cuentas
-    """
-    Controlador de Autenticación y Gestión de Usuarios para EcoTech Solutions.
-    """
+class AuthController:  # Coordina el inicio de sesión y la administración de cuentas
+    def __init__(self):
+        self.view = AuthView()
 
-    def __init__(self):  # Constructor del controlador
-        self.view = AuthView()  # Instancia la vista asociada
+    def iniciar_sesion(self) -> Usuario | None:  # Controla intentos de acceso y bloqueo en BD
+        UsuarioDAO.inicializar_admin()  # Pide crear el admin inicial si la base de datos está vacía
+        max_intentos = Settings.MAX_LOGIN_ATTEMPTS  # Límite configurable desde .env
 
-    def iniciar_sesion(self) -> Usuario | None:  # Controla el flujo completo de login antes de entrar al menú
-        UsuarioDAO.inicializar_admin_por_defecto()  # Asegura que exista el usuario admin inicial en BD
-        max_intentos = Settings.MAX_LOGIN_ATTEMPTS  # Obtiene el límite de intentos permitidos (ej. 3)
+        for intento in range(1, max_intentos + 1):
+            self.view.mostrar_banner_login(intento, max_intentos)  # Muestra el encabezado de login
+            credenciales = self.view.solicitar_credenciales()  # Pide usuario y clave oculta con getpass
+            nombre_usuario = credenciales["nombre_usuario"]
+            clave = credenciales["clave"]
 
-        for intento in range(1, max_intentos + 1):  # Itera desde el intento 1 hasta max_intentos
-            self.view.mostrar_banner_login(intento, max_intentos)  # Muestra el encabezado del login
-            credenciales = self.view.solicitar_credenciales()  # Pide usuario y contraseña por consola
-            nombre_usuario = credenciales["nombre_usuario"]  # Extrae el usuario ingresado
-            clave = credenciales["clave"]  # Extrae la contraseña ingresada
+            # Valida formato básico antes de consultar la base de datos
+            es_valido, mensaje = Usuario.validar_credenciales_ingreso(nombre_usuario, clave)
+            if not es_valido:
+                self.view.mostrar_error(mensaje)
+                continue
 
-            # 1. Validación preventiva: rechaza entradas vacías o con caracteres inválidos antes de ir a BD
-            es_valido, mensaje_validacion = Usuario.validar_credenciales_ingreso(nombre_usuario, clave)
-            if not es_valido:  # Si las entradas vienen vacías o malformadas
-                self.view.mostrar_error(f"Validación fallida: {mensaje_validacion}")  # Informa el error
-                continue  # Pasa al siguiente intento sin consultar la base de datos
+            usuario_bd = UsuarioDAO.obtener_por_username(nombre_usuario)  # Busca la cuenta en SQLite
+            if usuario_bd is not None:
+                bloqueado, msg_bloqueo = usuario_bd.esta_bloqueado()  # Revisa si sigue bloqueada en BD
+                if bloqueado:
+                    self.view.mostrar_error(msg_bloqueo)
+                    continue
 
-            # 2. Busca el usuario en SQLite y verifica su hash SHA-256 en tiempo constante
-            usuario_bd = UsuarioDAO.obtener_por_username(nombre_usuario)  # Consulta el usuario en la tabla usuario
-            if usuario_bd is not None and usuario_bd.verificar_credencial(clave):  # Verifica existencia y clave
-                self.view.mostrar_bienvenida(usuario_bd)  # Muestra saludo de acceso concedido
-                return usuario_bd  # Retorna el objeto Usuario autenticado al MainController
+                if usuario_bd.verificar_credencial(clave):  # Compara el hash scrypt en tiempo constante
+                    UsuarioDAO.reiniciar_intentos(usuario_bd)  # Limpia contador de fallos en BD
+                    self.view.mostrar_bienvenida(usuario_bd)
+                    return usuario_bd  # Devuelve el usuario autenticado
 
-            # Muestra mensaje genérico para no revelar si falló el usuario o la contraseña
-            self.view.mostrar_error(
-                "Credenciales incorrectas: el usuario no existe o la contraseña no coincide."
-            )
+                # Registra el intento fallido en SQLite y activa bloqueo si llegó al límite
+                _, quedo_bloqueado = UsuarioDAO.registrar_intento_fallido(usuario_bd)
+                if quedo_bloqueado:
+                    self.view.mostrar_error(
+                        f"Cuenta bloqueada por {Settings.LOCKOUT_MINUTES} minutos tras {max_intentos} fallos."
+                    )
+                    return None
+            else:
+                time.sleep(0.25)  # Simula tiempo de cómputo para no revelar si el usuario existe
 
-        # Si se agotan todos los intentos permitidos, bloquea el acceso
-        self.view.mostrar_error(
-            f"Ha superado el número máximo de intentos permitidos ({max_intentos}). "
-            "Acceso bloqueado por seguridad."
-        )
-        return None  # Retorna None indicando que el acceso fue denegado
+            self.view.mostrar_error("Credenciales incorrectas.")  # Mensaje genérico sin pistas al atacante
 
-    def ejecutar(self, usuario_actual: Usuario | None = None) -> None:  # Bucle del submenú de gestión de usuarios
-        while True:  # Mantiene activo el submenú hasta que el usuario elija 0
-            opcion = self.view.mostrar_menu_usuarios()  # Muestra opciones y lee selección
+        self.view.mostrar_error("Se agotaron los intentos permitidos. Acceso denegado.")
+        return None
+
+    def ejecutar(self, usuario_actual: Usuario) -> None:  # Submenú exclusivo para Administradores
+        exigir_rol(usuario_actual, "Administrador")  # Bloquea entrada directa sin rol Administrador
+        while True:
+            opcion = self.view.mostrar_menu_usuarios()
             if opcion == 1:
-                self.registrar_usuario()  # Llama al flujo de creación de usuario
+                self.registrar_usuario(usuario_actual)
             elif opcion == 2:
-                self.listar_usuarios()  # Llama al flujo de listado
+                self.listar_usuarios(usuario_actual)
             elif opcion == 3:
-                self.eliminar_usuario(usuario_actual)  # Llama al flujo de eliminación protegiendo la sesión activa
+                self.eliminar_usuario(usuario_actual)
             elif opcion == 0:
-                self.view.mostrar_mensaje("Saliendo de la gestión de usuarios.")
-                break  # Sale del submenú y regresa al menú principal
+                break
             else:
                 self.view.mostrar_error("Opción no válida.")
 
-    def registrar_usuario(self) -> None:  # Orquesta el registro de una nueva cuenta con clave encriptada
-        datos = self.view.formulario_nuevo_usuario()  # Solicita los datos mediante la vista
+    def registrar_usuario(self, usuario_actual: Usuario) -> None:
+        exigir_rol(usuario_actual, "Administrador")
+        datos = self.view.formulario_nuevo_usuario()
 
-        # Valida que el usuario y contraseña cumplan el formato mínimo
-        es_valido, msg = Usuario.validar_credenciales_ingreso(datos["nombre_usuario"], datos["clave"])
-        if not es_valido:
-            self.view.mostrar_error(msg)
-            return  # Cancela el registro si hay datos vacíos o inválidos
-
-        if datos["clave"] != datos["confirmacion"]:  # Verifica que ambas contraseñas coincidan
+        if datos["clave"] != datos["confirmacion"]:  # Comprueba que ambas claves coincidan
             self.view.mostrar_error("Las contraseñas ingresadas no coinciden.")
-            return  # Cancela el registro
+            return
 
-        if UsuarioDAO.obtener_por_username(datos["nombre_usuario"]):  # Verifica si el username ya está ocupado
-            self.view.mostrar_error(f"Ya existe un usuario registrado con el login '{datos['nombre_usuario']}'.")
-            return  # Cancela el registro
+        if UsuarioDAO.obtener_por_username(datos["nombre_usuario"]):  # Evita nombres duplicados
+            self.view.mostrar_error("El nombre de usuario ya está registrado.")
+            return
 
-        try:  # Protege la instanciación y el guardado en base de datos
-            password_encriptada = Usuario.encriptar_credencial(datos["clave"])  # Genera el hash SHA-256
-            nuevo_usuario = Usuario(  # Crea el objeto Usuario con la clave ya encriptada
+        if datos["id_empleado"] is not None and not EmpleadoDAO.obtener_por_id(datos["id_empleado"]):
+            self.view.mostrar_error(f"El empleado #{datos['id_empleado']} no existe.")
+            return
+
+        try:
+            clave_hash = Usuario.encriptar_credencial(datos["clave"])  # Genera hash scrypt con sal
+            nuevo = Usuario(
                 nombre_usuario=datos["nombre_usuario"],
-                contrasena_hash=password_encriptada,
+                contrasena_hash=clave_hash,
                 rol=datos["rol"],
-                id_empleado=datos["id_empleado"]
+                id_empleado=datos["id_empleado"],
             )
-            if UsuarioDAO.crear(nuevo_usuario):  # Guarda el usuario en SQLite mediante el DAO
-                self.view.mostrar_mensaje(
-                    f"Usuario '{nuevo_usuario.nombre_usuario}' registrado exitosamente con credencial encriptada."
-                )
+            if UsuarioDAO.crear(nuevo):
+                self.view.mostrar_mensaje(f"Usuario '{nuevo.nombre_usuario}' creado con éxito.")
             else:
-                self.view.mostrar_error("No fue posible guardar el usuario en la base de datos.")
-        except (ValueError, TypeError) as e:  # Captura errores de validación de los setters del modelo
-            self.view.mostrar_error(f"Datos inválidos: {e}")
+                self.view.mostrar_error("No fue posible guardar el usuario.")
+        except ValueError as e:
+            self.view.mostrar_error(str(e))
 
-    def listar_usuarios(self) -> None:  # Obtiene y muestra todos los usuarios registrados
-        usuarios = UsuarioDAO.obtener_todos()  # Pide la lista al DAO
-        self.view.mostrar_lista_usuarios(usuarios)  # Envía la lista a la vista para imprimirla
+    def listar_usuarios(self, usuario_actual: Usuario) -> None:
+        exigir_rol(usuario_actual, "Administrador")
+        self.view.mostrar_lista_usuarios(UsuarioDAO.obtener_todos())
 
-    def eliminar_usuario(self, usuario_actual: Usuario | None = None) -> None:  # Elimina una cuenta de usuario
-        id_usuario = self.view.solicitar_id_usuario()  # Pide el ID a eliminar
-        usuario = UsuarioDAO.obtener_por_id(id_usuario)  # Busca si existe ese ID en SQLite
-        if not usuario:  # Si no existe
+    def eliminar_usuario(self, usuario_actual: Usuario) -> None:
+        exigir_rol(usuario_actual, "Administrador")
+        id_usuario = self.view.solicitar_id_usuario()
+        usuario = UsuarioDAO.obtener_por_id(id_usuario)
+        if not usuario:
             self.view.mostrar_error("Usuario no encontrado.")
             return
-
-        # Impide que el usuario conectado borre su propia cuenta mientras está en sesión
-        if usuario_actual and usuario.id_usuario == usuario_actual.id_usuario:
-            self.view.mostrar_error("No puede eliminar su propio usuario con la sesión activa.")
+        if usuario.id_usuario == usuario_actual.id_usuario:  # Impide que el admin se borre a sí mismo
+            self.view.mostrar_error("No puede eliminar su propio usuario mientras está conectado.")
             return
-
-        if self.view.confirmar_eliminacion(usuario.nombre_usuario):  # Pide confirmación al operador
-            if UsuarioDAO.eliminar(id_usuario):  # Ejecuta DELETE en SQLite
-                self.view.mostrar_mensaje(f"Usuario '{usuario.nombre_usuario}' eliminado exitosamente.")
+        if self.view.confirmar_eliminacion(usuario.nombre_usuario):
+            if UsuarioDAO.eliminar(id_usuario):
+                self.view.mostrar_mensaje(f"Usuario '{usuario.nombre_usuario}' eliminado.")
             else:
-                self.view.mostrar_error("Error al eliminar el usuario en la base de datos.")
-        else:
-            self.view.mostrar_mensaje("Operación cancelada.")
+                self.view.mostrar_error("No fue posible eliminar el usuario.")

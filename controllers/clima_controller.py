@@ -1,100 +1,106 @@
-from views.clima_view import ClimaView  # Importa la vista del módulo climático
-from services.clima_service import ClimaService  # Importa el servicio que consume la API Open-Meteo
-from models.reporte_clima_dao import ReporteClimaDAO  # Importa el DAO para guardar reportes en SQLite
-from models.usuario import Usuario  # Importa el modelo Usuario para registrar quién hizo la consulta
+import logging  # Registra incidentes de API en logs/ecotech.log sin ensuciar la consola
+from controllers.seguridad import exigir_sesion  # Exige usuario autenticado en cada acción
+from exceptions import (  # Importa excepciones propias de red y validación
+    ApiConexionError,
+    ApiDatosInvalidosError,
+    ApiHttpError,
+    ApiTimeoutError,
+    EcoTechError,
+    ValidacionError,
+)
+from models.proyecto_dao import ProyectoDAO  # Verifica que el proyecto a vincular exista
+from models.reporte_clima_dao import ReporteClimaDAO  # Guarda y consulta historial climático
+from models.usuario import Usuario
+from services.clima_service import ClimaService  # Servicio externo Open-Meteo
+from views.clima_view import ClimaView
+
+log = logging.getLogger(__name__)
 
 
-class ClimaController:  # Define el controlador del módulo de clima
-    """
-    Controlador que coordina la vista de clima, el servicio Open-Meteo y la persistencia local.
-    """
+class ClimaController:  # Orquesta el monitoreo climático para planificación de proyectos
+    def __init__(self):
+        self.view = ClimaView()
 
-    def __init__(self):  # Constructor del controlador
-        self.view = ClimaView()  # Instancia la vista de clima
-        self.service = ClimaService()  # Instancia el servicio externo
-        self.reporte_dao = ReporteClimaDAO()  # Instancia el DAO de reportes climáticos
-
-    def ejecutar(self, usuario_actual: Usuario | None = None) -> None:  # Bucle principal del módulo clima
-        while True:  # Mantiene el submenú activo hasta seleccionar 0
-            opcion = self.view.mostrar_menu()  # Muestra opciones y lee selección
+    def ejecutar(self, usuario_actual: Usuario) -> None:  # Menú principal del módulo de clima
+        exigir_sesion(usuario_actual)
+        while True:
+            opcion = self.view.mostrar_menu()
             if opcion == 1:
-                self.consultar_clima_ciudad()  # Solo consulta en tiempo real sin guardar
+                self.consultar_clima_ciudad(usuario_actual)
             elif opcion == 2:
-                self.consultar_y_guardar_reporte(usuario_actual)  # Consulta en API y guarda en SQLite
+                self.consultar_y_guardar_reporte(usuario_actual)
             elif opcion == 3:
-                self.listar_historial()  # Muestra todos los reportes guardados
+                self.listar_historial(usuario_actual)
             elif opcion == 4:
-                self.consultar_por_proyecto()  # Filtra reportes guardados por ID de proyecto
+                self.consultar_por_proyecto(usuario_actual)
             elif opcion == 5:
-                self.diagnosticar_conexion()  # Verifica conectividad con Open-Meteo
+                self.diagnosticar_conexion(usuario_actual)
             elif opcion == 0:
-                break  # Regresa al menú principal
+                break
             else:
-                self.view.mostrar_error("Opción no válida. Intente nuevamente.")
+                self.view.mostrar_error("Opción no válida.")
 
-    def consultar_clima_ciudad(self) -> None:  # Consulta el clima actual sin persistirlo
-        ciudad = self.view.pedir_ciudad()  # Solicita el nombre de la ciudad
-        if not ciudad:  # Valida que no esté vacío
-            self.view.mostrar_error("Debe ingresar el nombre de una ciudad.")
-            return
-        try:  # Protege contra errores de validación o red
-            reporte, estado = self.service.consultar_clima(ciudad)  # Llama al servicio externo
-            self.view.mostrar_mensaje(estado)  # Muestra el estado de la operación (ONLINE u OFFLINE)
-            if reporte:  # Si se obtuvo un reporte válido
-                self.view.mostrar_reporte_actual(reporte)  # Muestra temperatura y viento en pantalla
-        except ValueError as e:  # Captura errores de sanitización de ciudad
-            self.view.mostrar_error(str(e))
-        except Exception as e:  # Captura cualquier otro error inesperado
-            self.view.mostrar_error(f"Error inesperado al consultar clima: {e}")
-
-    def consultar_y_guardar_reporte(self, usuario_actual: Usuario | None = None) -> None:  # Consulta y guarda en BD
-        ciudad = self.view.pedir_ciudad()  # Pide la ciudad
-        if not ciudad:
-            self.view.mostrar_error("Debe ingresar el nombre de una ciudad.")
-            return
+    def _obtener_reporte_con_respaldo(self, ciudad: str):  # Consulta API y activa respaldo ante falla
         try:
-            reporte, estado = self.service.consultar_clima(ciudad)  # Consulta la API Open-Meteo
-            self.view.mostrar_mensaje(estado)  # Informa resultado de la consulta
-            if not reporte:  # Si no se encontraron datos, cancela el guardado
-                return
-
-            self.view.mostrar_reporte_actual(reporte)  # Muestra los datos obtenidos antes de guardar
-            if not self.view.confirmar_guardado():  # Pregunta al usuario si desea persistir el reporte
-                self.view.mostrar_mensaje("Guardado cancelado.")
-                return
-
-            # Asocia opcionalmente el reporte a un proyecto y registra el ID del usuario conectado
-            reporte.id_proyecto = self.view.pedir_id_proyecto_opcional()
-            reporte.id_usuario = usuario_actual.id_usuario if usuario_actual else None
-
-            id_generado = self.reporte_dao.insertar(reporte)  # Inserta el reporte en SQLite
-            if id_generado:  # Si la inserción fue exitosa
-                reporte.id_reporte = id_generado  # Actualiza el ID en el objeto
-                self.view.mostrar_mensaje(
-                    f"Reporte climático #{id_generado} guardado con éxito en ecotech_solutions.db."
-                )
-            else:
-                self.view.mostrar_error(
-                    "No se pudo guardar el reporte (verifique que el ID de proyecto exista si ingresó uno)."
-                )
-        except ValueError as e:
+            return ClimaService.consultar_clima(ciudad)  # Intenta obtener clima real desde Open-Meteo
+        except ValidacionError as e:
+            self.view.mostrar_error(str(e))  # Error de entrada del usuario (no activa contingencia)
+            return None
+        except (ApiTimeoutError, ApiConexionError, ApiHttpError, ApiDatosInvalidosError) as e:
+            log.warning("Falla en Open-Meteo para '%s': %s", ciudad, e)
             self.view.mostrar_error(str(e))
-        except Exception as e:
-            self.view.mostrar_error(f"Error al registrar reporte: {e}")
+            respaldo = ClimaService.obtener_respaldo(ciudad)  # Busca registro local de respaldo
+            if respaldo is not None:
+                self.view.mostrar_mensaje("[MODO CONTINGENCIA] Se cargó registro local de respaldo.")
+                return respaldo
+            return None
 
-    def listar_historial(self) -> None:  # Lista todos los reportes guardados en SQLite
-        reportes = self.reporte_dao.listar_todos()  # Obtiene los registros desde el DAO
-        self.view.mostrar_historial(reportes)  # Los muestra en consola
+    def consultar_clima_ciudad(self, usuario_actual: Usuario) -> None:
+        exigir_sesion(usuario_actual)
+        ciudad = self.view.pedir_ciudad()
+        reporte = self._obtener_reporte_con_respaldo(ciudad)
+        if reporte:
+            self.view.mostrar_reporte_actual(reporte)
 
-    def consultar_por_proyecto(self) -> None:  # Busca reportes asociados a un proyecto
-        id_proyecto = self.view.pedir_id_proyecto_busqueda()  # Pide el ID del proyecto
-        reportes = self.reporte_dao.obtener_por_proyecto(id_proyecto)  # Consulta en SQLite
-        self.view.mostrar_historial(reportes)  # Muestra los resultados
+    def consultar_y_guardar_reporte(self, usuario_actual: Usuario) -> None:
+        exigir_sesion(usuario_actual)
+        ciudad = self.view.pedir_ciudad()
+        reporte = self._obtener_reporte_con_respaldo(ciudad)
+        if not reporte:
+            return
 
-    def diagnosticar_conexion(self) -> None:  # Ejecuta prueba de conectividad con Open-Meteo
-        self.view.mostrar_mensaje("Verificando conectividad con Open-Meteo...")
-        exito, detalle = self.service.probar_conectividad()  # Prueba conexión HTTP
-        if exito:
-            self.view.mostrar_mensaje(f"[ONLINE] {detalle}")
+        self.view.mostrar_reporte_actual(reporte)
+        if not self.view.confirmar_guardado():
+            self.view.mostrar_mensaje("Guardado cancelado.")
+            return
+
+        id_proyecto = self.view.pedir_id_proyecto_opcional()
+        if id_proyecto is not None and not ProyectoDAO.obtener_por_id(id_proyecto):
+            self.view.mostrar_error(f"El proyecto #{id_proyecto} no existe en la base de datos.")
+            return
+
+        reporte.id_proyecto = id_proyecto
+        reporte.id_usuario = usuario_actual.id_usuario
+
+        id_generado = ReporteClimaDAO.insertar(reporte)
+        if id_generado:
+            self.view.mostrar_mensaje(f"Reporte #{id_generado} ({reporte.origen}) guardado con éxito.")
         else:
-            self.view.mostrar_error(f"[OFFLINE] {detalle}")
+            self.view.mostrar_error("No fue posible guardar el reporte climático.")
+
+    def listar_historial(self, usuario_actual: Usuario) -> None:
+        exigir_sesion(usuario_actual)
+        self.view.mostrar_historial(ReporteClimaDAO.listar_todos())
+
+    def consultar_por_proyecto(self, usuario_actual: Usuario) -> None:
+        exigir_sesion(usuario_actual)
+        id_proyecto = self.view.pedir_id_proyecto_busqueda()
+        self.view.mostrar_historial(ReporteClimaDAO.obtener_por_proyecto(id_proyecto))
+
+    def diagnosticar_conexion(self, usuario_actual: Usuario) -> None:
+        exigir_sesion(usuario_actual)
+        try:
+            _, detalle = ClimaService.probar_conectividad()
+            self.view.mostrar_mensaje(f"[ONLINE] {detalle}")
+        except EcoTechError as e:
+            self.view.mostrar_error(f"[OFFLINE] {e}")

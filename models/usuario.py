@@ -1,115 +1,134 @@
-import hashlib  # Importa la librería para generar resúmenes criptográficos SHA-256
-import hmac     # Importa la librería para comparar hashes en tiempo constante de forma segura
-import re       # Importa expresiones regulares para validar formatos de texto
+import hashlib  # Provee el algoritmo criptográfico scrypt
+import hmac  # Permite comparar hashes en tiempo constante (evita ataques de tiempo)
+import os  # Genera bytes aleatorios seguros para la sal de cada usuario
+import re  # Valida formatos de usuario, contraseña y hash mediante expresiones regulares
+from datetime import datetime  # Controla la fecha y hora de vencimiento de bloqueos
 
 
-class Usuario:  # Define el modelo de dominio que representa una cuenta de usuario del sistema
-    """
-    Modelo de Dominio para la entidad Usuario (Autenticación y Cuentas).
-    """
-    ROLES: set[str] = {"Administrador", "Gerente", "Empleado", "Operador"}  # Conjunto de roles permitidos
+class Usuario:  # Modelo de dominio para la entidad Usuario con hash scrypt con sal
+    ROLES: set[str] = {"Administrador", "Gerente", "Empleado", "Operador"}  # Roles válidos del sistema
+    SCRYPT_PARAMS = dict(n=2**14, r=8, p=1, dklen=32)  # Parámetros recomendados de costo para scrypt
 
-    def __init__(  # Constructor de la clase Usuario
+    def __init__(
         self,
-        nombre_usuario: str,       # Nombre de acceso del usuario
-        contrasena_hash: str,      # Hash SHA-256 de la contraseña (64 caracteres hexadecimales)
-        rol: str = "Empleado",     # Rol asignado dentro del sistema
-        id_empleado: int | None = None,  # ID del empleado vinculado (opcional)
-        id_usuario: int | None = None    # ID autoincremental de la base de datos (opcional al crear)
+        nombre_usuario: str,
+        contrasena_hash: str,
+        rol: str = "Empleado",
+        id_empleado: int | None = None,
+        id_usuario: int | None = None,
+        intentos_fallidos: int = 0,
+        bloqueado_hasta: str | None = None,
     ):
-        self.id_usuario = id_usuario  # Asigna el identificador único del usuario
-        self.nombre_usuario = nombre_usuario  # Llama al setter nombre_usuario para validar el formato
-        self.contrasena_hash = contrasena_hash  # Llama al setter contrasena_hash para validar el hash SHA-256
-        self.rol = rol  # Llama al setter rol para validar que sea un rol permitido
-        self.id_empleado = id_empleado  # Asigna la referencia al empleado asociado
+        self.id_usuario = id_usuario  # ID autoincremental asignado por SQLite
+        self.nombre_usuario = nombre_usuario  # Valida mediante setter
+        self.contrasena_hash = contrasena_hash  # Valida mediante setter que sea hash scrypt
+        self.rol = rol  # Valida mediante setter
+        self.id_empleado = id_empleado  # ID del empleado asociado (opcional)
+        self.intentos_fallidos = int(intentos_fallidos or 0)  # Contador de fallos consecutivos
+        self.bloqueado_hasta = bloqueado_hasta  # Marca ISO de cuándo termina el bloqueo
 
-    @property  # Define el getter de nombre_usuario
+    @property
     def nombre_usuario(self) -> str:
-        return self._nombre_usuario  # Retorna el atributo privado _nombre_usuario
+        return self._nombre_usuario
 
-    @nombre_usuario.setter  # Define el setter de nombre_usuario con validaciones defensivas
-    def nombre_usuario(self, valor: str) -> None:
-        if not isinstance(valor, str) or not valor.strip():  # Verifica que no sea nulo ni una cadena vacía
-            raise ValueError("El nombre de usuario no puede estar vacío.")  # Lanza error si está vacío
-        limpio = valor.strip().lower()  # Elimina espacios extremos y convierte a minúsculas
-        if len(limpio) < 3:  # Exige una longitud mínima de 3 caracteres
-            raise ValueError("El nombre de usuario debe tener al menos 3 caracteres.")  # Lanza error si es muy corto
-        if not re.match(r"^[a-zA-Z0-9_.-]+$", limpio):  # Valida que solo tenga letras, números, puntos o guiones
-            raise ValueError("El nombre de usuario contiene caracteres no permitidos.")  # Rechaza símbolos raros
-        self._nombre_usuario = limpio  # Guarda el nombre de usuario ya validado y limpio
+    @nombre_usuario.setter
+    def nombre_usuario(self, valor: str) -> None:  # Valida largo (3-30) y caracteres seguros
+        if not isinstance(valor, str) or not valor.strip():
+            raise ValueError("El nombre de usuario no puede estar vacío.")
+        limpio = valor.strip().lower()  # Normaliza a minúsculas
+        if not (3 <= len(limpio) <= 30):
+            raise ValueError("El usuario debe tener entre 3 y 30 caracteres.")
+        if not re.fullmatch(r"[a-z0-9_.-]+", limpio):
+            raise ValueError("El usuario solo permite letras, números, puntos y guiones.")
+        self._nombre_usuario = limpio
 
-    @property  # Define el getter de contrasena_hash
+    @property
     def contrasena_hash(self) -> str:
-        return self._contrasena_hash  # Retorna el hash SHA-256 almacenado
+        return self._contrasena_hash
 
-    @contrasena_hash.setter  # Define el setter que impide almacenar contraseñas sin encriptar
-    def contrasena_hash(self, valor: str) -> None:
-        if not isinstance(valor, str) or not valor.strip():  # Comprueba que el hash no esté vacío
-            raise ValueError("El hash de la contraseña no puede estar vacío.")  # Rechaza valores vacíos
-        limpio = valor.strip().lower()  # Limpia espacios y normaliza a minúsculas
-        if len(limpio) != 64 or not re.match(r"^[a-f0-9]{64}$", limpio):  # Exige exactamente 64 caracteres hexadecimales
-            raise ValueError("La credencial debe almacenarse como un hash SHA-256 válido.")  # Impide guardar texto plano
-        self._contrasena_hash = limpio  # Guarda el hash validado en el atributo privado
+    @contrasena_hash.setter
+    def contrasena_hash(self, valor: str) -> None:  # Rechaza claves en texto plano o SHA-256 sin sal
+        if not isinstance(valor, str) or not re.fullmatch(r"scrypt\$[a-f0-9]{32}\$[a-f0-9]{64}", valor):
+            raise ValueError("La credencial debe almacenarse como hash scrypt con sal.")
+        self._contrasena_hash = valor
 
-    @property  # Define el getter de rol
+    @property
     def rol(self) -> str:
-        return self._rol  # Retorna el rol del usuario
+        return self._rol
 
-    @rol.setter  # Define el setter de rol
-    def rol(self, valor: str) -> None:
-        if not isinstance(valor, str) or not valor.strip():  # Verifica que el rol no venga vacío
-            raise ValueError("El rol no puede estar vacío.")  # Lanza error si está vacío
-        rol_limpio = valor.strip().title()  # Elimina espacios y capitaliza la primera letra
-        if rol_limpio not in self.ROLES:  # Verifica que el rol esté dentro del conjunto permitido
-            opciones = ", ".join(sorted(self.ROLES))  # Prepara texto con los roles válidos
-            raise ValueError(f"Rol '{valor}' no válido. Opciones permitidas: {opciones}.")  # Rechaza roles desconocidos
-        self._rol = rol_limpio  # Guarda el rol validado
+    @rol.setter
+    def rol(self, valor: str) -> None:  # Asegura que el rol esté dentro del catálogo permitido
+        if not isinstance(valor, str) or not valor.strip():
+            raise ValueError("El rol no puede estar vacío.")
+        rol_limpio = valor.strip().title()
+        if rol_limpio not in self.ROLES:
+            opciones = ", ".join(sorted(self.ROLES))
+            raise ValueError(f"Rol no válido. Opciones permitidas: {opciones}.")
+        self._rol = rol_limpio
 
-    @staticmethod  # Método estático que no requiere tener una instancia previa de Usuario
-    def encriptar_credencial(clave_plana: str) -> str:
-        if not isinstance(clave_plana, str) or not clave_plana.strip():  # Verifica que la clave no esté vacía
-            raise ValueError("La contraseña no puede estar vacía ni contener solo espacios.")  # Rechaza claves vacías
-        clave_limpia = clave_plana.strip()  # Quita espacios al inicio y al final
-        if len(clave_limpia) < 4:  # Exige al menos 4 caracteres para la contraseña
-            raise ValueError("La contraseña debe tener al menos 4 caracteres.")  # Lanza error si es demasiado corta
-        return hashlib.sha256(clave_limpia.encode("utf-8")).hexdigest()  # Convierte a bytes, aplica SHA-256 y retorna hex
+    @staticmethod
+    def validar_politica_clave(clave: str) -> None:  # Exige 10-128 caracteres mezclando letras y números
+        if not isinstance(clave, str) or not clave.strip():  # No hace .strip() para respetar espacios reales
+            raise ValueError("La contraseña no puede estar vacía ni ser solo espacios.")
+        if not (8 <= len(clave) <= 128):
+            raise ValueError("La contraseña debe tener entre 8 y 128 caracteres.")
+        if not (re.search(r"[A-Za-z]", clave) and re.search(r"\d", clave)):
+            raise ValueError("La contraseña debe incluir al menos una letra y un número.")
 
-    @staticmethod  # Método estático para validar el formato de las credenciales antes de consultar la BD
+    @classmethod
+    def encriptar_credencial(cls, clave_plana: str) -> str:  # Genera hash scrypt con sal aleatoria de 16 bytes
+        cls.validar_politica_clave(clave_plana)
+        sal = os.urandom(16)  # Sal única por cada usuario
+        digest = hashlib.scrypt(clave_plana.encode("utf-8"), salt=sal, **cls.SCRYPT_PARAMS)
+        return f"scrypt${sal.hex()}${digest.hex()}"  # Empaqueta algoritmo, sal y hash en un solo texto
+
+    @staticmethod
     def validar_credenciales_ingreso(nombre_usuario: str, clave_plana: str) -> tuple[bool, str]:
-        if not isinstance(nombre_usuario, str) or not nombre_usuario.strip():  # Valida que el usuario no esté vacío
-            return (False, "El campo 'Usuario' no puede estar vacío.")  # Retorna falso y el motivo
-        if not isinstance(clave_plana, str) or not clave_plana.strip():  # Valida que la contraseña no esté vacía
-            return (False, "El campo 'Contraseña' no puede estar vacío.")  # Retorna falso y el motivo
+        if not isinstance(nombre_usuario, str) or not nombre_usuario.strip():
+            return (False, "El campo 'Usuario' no puede estar vacío.")
+        if not isinstance(clave_plana, str) or not clave_plana.strip():
+            return (False, "El campo 'Contraseña' no puede estar vacío.")
 
-        user_limpio = nombre_usuario.strip()  # Limpia espacios del usuario
-        clave_limpia = clave_plana.strip()  # Limpia espacios de la contraseña
+        user_limpio = nombre_usuario.strip().lower()
+        if not (3 <= len(user_limpio) <= 30) or not re.fullmatch(r"[a-z0-9_.-]+", user_limpio):
+            return (False, "Formato de usuario inválido (3 a 30 caracteres).")
+        if not (1 <= len(clave_plana) <= 128):  # Limita el largo máximo para evitar sobrecarga de CPU
+            return (False, "Longitud de contraseña fuera de rango.")
+        return (True, "Formato válido.")
 
-        if len(user_limpio) < 3:  # Verifica longitud mínima del usuario
-            return (False, "El nombre de usuario debe tener al menos 3 caracteres.")  # Retorna falso
-        if not re.match(r"^[a-zA-Z0-9_.-]+$", user_limpio):  # Verifica caracteres permitidos en el usuario
-            return (False, "El nombre de usuario contiene caracteres no permitidos.")  # Retorna falso
-        if len(clave_limpia) < 4:  # Verifica longitud mínima de la contraseña
-            return (False, "La contraseña debe tener al menos 4 caracteres.")  # Retorna falso
+    def verificar_credencial(self, clave_ingresada: str) -> bool:  # Verifica clave contra el hash guardado
+        if not isinstance(clave_ingresada, str) or not (1 <= len(clave_ingresada) <= 128):
+            return False
+        try:
+            _, sal_hex, hash_hex = self._contrasena_hash.split("$")  # Separa sal y digest almacenados
+            calculado = hashlib.scrypt(
+                clave_ingresada.encode("utf-8"),
+                salt=bytes.fromhex(sal_hex),
+                **self.SCRYPT_PARAMS,
+            )
+            return hmac.compare_digest(calculado.hex(), hash_hex)  # Compara en tiempo constante
+        except (ValueError, TypeError):
+            return False
 
-        return (True, "Formato de credenciales válido.")  # Indica que ambos campos pasaron la validación
+    def esta_bloqueado(self) -> tuple[bool, str]:  # Comprueba si el bloqueo temporal sigue activo
+        if not self.bloqueado_hasta:
+            return (False, "")
+        try:
+            limite = datetime.fromisoformat(self.bloqueado_hasta)
+            ahora = datetime.now()
+            if ahora < limite:
+                segundos = int((limite - ahora).total_seconds())
+                return (True, f"Cuenta bloqueada temporalmente. Intente en {segundos} segundos.")
+        except ValueError:
+            pass
+        return (False, "")
 
-    def verificar_credencial(self, clave_ingresada: str) -> bool:  # Método que valida la clave ingresada en el login
-        if not isinstance(clave_ingresada, str) or not clave_ingresada.strip():  # Rechaza entradas vacías
-            return False  # Retorna falso inmediatamente
-        try:  # Protege el cálculo del hash contra errores de longitud
-            hash_ingresado = self.encriptar_credencial(clave_ingresada)  # Encripta la clave que escribió el usuario
-            return hmac.compare_digest(self._contrasena_hash, hash_ingresado)  # Compara ambos hashes de forma segura
-        except ValueError:  # Si la clave no cumple el formato mínimo
-            return False  # Deniega la verificación
-
-    def __str__(self) -> str:  # Representación en texto legible del objeto Usuario
-        id_str = self.id_usuario if self.id_usuario is not None else "Sin asignar"  # Formatea el ID si existe
-        emp_str = self.id_empleado if self.id_empleado is not None else "Sin empleado"  # Formatea el ID de empleado
-        hash_resumen = f"{self.contrasena_hash[:12]}...{self.contrasena_hash[-6:]}"  # Muestra solo inicio y fin del hash
+    def __str__(self) -> str:
+        id_str = self.id_usuario if self.id_usuario is not None else "Sin asignar"
+        emp_str = self.id_empleado if self.id_empleado is not None else "Sin empleado"
+        partes = self.contrasena_hash.split("$")
+        resumen = f"scrypt${partes[1][:6]}...${partes[2][:8]}..."  # Muestra solo prefijo del hash por seguridad
         return (
             f"Usuario [ID: {id_str}] | Username: {self.nombre_usuario} | "
-            f"Rol: {self.rol} | Empleado ID: {emp_str} | Hash SHA-256: {hash_resumen}"
-        )  # Retorna la ficha formateada
-
-    def __repr__(self) -> str:  # Representación técnica para depuración
-        return f"Usuario(id_usuario={self.id_usuario}, nombre_usuario='{self.nombre_usuario}', rol='{self.rol}')"
+            f"Rol: {self.rol} | Empleado ID: {emp_str} | Hash: {resumen}"
+        )

@@ -1,23 +1,7 @@
-# Archivos compilados y caché de Python
 __pycache__/
 *.py[cod]
-*$py.class
-
-# Entorno virtual local
-.venv/
-venv/
-env/
-
-# Variables de entorno y credenciales sensibles (NUNCA subir a GitHub)
-.env
-
-# Base de datos local de SQLite
-ecotech_solutions.db
 *.db
-*.sqlite3
-
-# Archivos de configuración de editores y sistema operativo
-.vscode/
-.idea/
+.env
+.venv/
+logs/
 .DS_Store
-Thumbs.db

@@ -1,100 +1,130 @@
-import re  # Importa expresiones regulares para validar códigos de moneda ISO (ej. USD, CLP, EUR)
-from datetime import datetime  # Importa datetime para sellar la fecha exacta del cálculo
+import math  # Valida números finitos (rechaza nan e inf)
+import re  # Valida códigos ISO de 3 letras para divisas
+from datetime import datetime  # Valida formato y vigencia de la fecha de tasa
+from decimal import Decimal, ROUND_HALF_UP  # Cálculo financiero exacto sin errores de coma flotante
 
 
-class PagoInternacional:  # Define el modelo de dominio para un pago ajustado a moneda extranjera
-    """
-    Modelo de Dominio que representa el cálculo y respaldo de un pago internacional
-    utilizando el tipo de cambio obtenido desde Frankfurter API.
-    """
-    def __init__(  # Constructor de la clase PagoInternacional
+class PagoInternacional:  # Modelo de pagos internacionales con aritmética Decimal
+    MONTO_MAX = 1_000_000.0  # Límite superior permitido por operación
+    MONEDAS_SIN_DECIMALES = {"CLP", "JPY", "KRW"}  # Divisas que se redondean a entero
+
+    def __init__(
         self,
-        pais_proyecto: str,                 # País donde se ejecuta el proyecto (ej. Chile, Brasil, España)
-        moneda_origen: str,                 # Código ISO de la moneda base (ej. USD)
-        moneda_destino: str,                # Código ISO de la moneda del país destino (ej. CLP, EUR, BRL)
-        monto_base: float,                  # Monto original a pagar en moneda_origen
-        tasa_cambio: float,                 # Tasa de conversión obtenida desde la API externa
-        monto_convertido: float | None = None,  # Resultado final (si es None, se calcula automáticamente)
-        fecha_tasa: str | None = None,      # Fecha oficial de publicación de la tasa económica
-        fecha_registro: str | None = None,  # Fecha y hora local en que se registró el pago
-        id_empleado: int | None = None,     # ID del trabajador beneficiario (opcional)
-        id_proyecto: int | None = None,     # ID del proyecto asociado (opcional)
-        id_usuario: int | None = None,      # ID del usuario autenticado que realizó el cálculo
-        id_pago: int | None = None          # ID autoincremental generado por SQLite
+        pais_proyecto: str,
+        moneda_origen: str,
+        moneda_destino: str,
+        monto_base: float,
+        tasa_cambio: float,
+        monto_convertido: float | None = None,
+        fecha_tasa: str = "",
+        origen: str = "API",
+        fecha_registro: str | None = None,
+        id_empleado: int | None = None,
+        id_proyecto: int | None = None,
+        id_usuario: int | None = None,
+        id_pago: int | None = None,
     ):
-        self.id_pago = id_pago  # Asigna el identificador único del registro
-        self.pais_proyecto = pais_proyecto  # Llama al setter pais_proyecto para validar el texto
-        self.moneda_origen = moneda_origen  # Llama al setter moneda_origen para validar formato ISO de 3 letras
-        self.moneda_destino = moneda_destino  # Llama al setter moneda_destino para validar formato ISO de 3 letras
-        self.monto_base = monto_base  # Llama al setter monto_base para validar que sea mayor a cero
-        self.tasa_cambio = tasa_cambio  # Llama al setter tasa_cambio para validar que sea mayor a cero
-        # Si no se entrega el monto convertido, lo calcula multiplicando monto_base * tasa_cambio
-        self.monto_convertido = (
-            round(float(monto_convertido), 2)
-            if monto_convertido is not None
-            else round(self._monto_base * self._tasa_cambio, 2)
-        )  # Redondea el total convertido a 2 decimales
-        self.fecha_tasa = fecha_tasa or datetime.now().strftime("%Y-%m-%d")  # Fecha de vigencia de la tasa
-        self.fecha_registro = fecha_registro or datetime.now().strftime("%Y-%m-%d %H:%M:%S")  # Marca de tiempo local
-        self.id_empleado = id_empleado  # Asigna referencia al empleado
-        self.id_proyecto = id_proyecto  # Asigna referencia al proyecto
-        self.id_usuario = id_usuario  # Asigna referencia al operador del sistema
+        self.id_pago = id_pago
+        self.pais_proyecto = pais_proyecto
+        self.moneda_origen = moneda_origen
+        self.moneda_destino = moneda_destino
+        self.monto_base = monto_base
+        self.tasa_cambio = tasa_cambio
+        self.origen = origen if origen in ("API", "contingencia") else "API"
+        self.fecha_tasa = fecha_tasa
+        self.fecha_registro = fecha_registro or datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+        self.id_empleado = id_empleado
+        self.id_proyecto = id_proyecto
+        self.id_usuario = id_usuario
 
-    @property  # Getter de pais_proyecto
+        # Calcula el monto final con precisión decimal según la moneda destino
+        if monto_convertido is not None:
+            self.monto_convertido = float(monto_convertido)
+        else:
+            cuanto = Decimal("1") if self._moneda_destino in self.MONEDAS_SIN_DECIMALES else Decimal("0.01")
+            total = (Decimal(str(self._monto_base)) * Decimal(str(self._tasa_cambio))).quantize(
+                cuanto, rounding=ROUND_HALF_UP
+            )
+            self.monto_convertido = float(total)
+
+    @property
     def pais_proyecto(self) -> str:
-        return self._pais_proyecto  # Retorna el nombre del país
+        return self._pais_proyecto
 
-    @pais_proyecto.setter  # Setter de pais_proyecto con validación
+    @pais_proyecto.setter
     def pais_proyecto(self, valor: str) -> None:
-        if not isinstance(valor, str) or not valor.strip():  # Verifica que no esté vacío
-            raise ValueError("El país del proyecto no puede estar vacío.")  # Rechaza valores vacíos
-        self._pais_proyecto = valor.strip().title()  # Limpia espacios y capitaliza cada palabra
+        if not isinstance(valor, str) or not (2 <= len(valor.strip()) <= 60):
+            raise ValueError("El país del proyecto debe tener entre 2 y 60 caracteres.")
+        self._pais_proyecto = valor.strip().title()
 
-    @property  # Getter de moneda_origen
+    @property
     def moneda_origen(self) -> str:
-        return self._moneda_origen  # Retorna el código ISO de origen
+        return self._moneda_origen
 
-    @moneda_origen.setter  # Setter de moneda_origen
+    @moneda_origen.setter
     def moneda_origen(self, valor: str) -> None:
-        if not isinstance(valor, str) or not re.fullmatch(r"[A-Za-z]{3}", valor.strip()):  # Exige 3 letras ISO
-            raise ValueError("La moneda de origen debe ser un código ISO de 3 letras (ej. USD, EUR).")
-        self._moneda_origen = valor.strip().upper()  # Guarda en mayúsculas estándar (ej. 'USD')
+        if not isinstance(valor, str) or not re.fullmatch(r"[A-Za-z]{3}", valor.strip()):
+            raise ValueError("La moneda de origen debe ser un código ISO de 3 letras (ej. USD).")
+        self._moneda_origen = valor.strip().upper()
 
-    @property  # Getter de moneda_destino
+    @property
     def moneda_destino(self) -> str:
-        return self._moneda_destino  # Retorna el código ISO de destino
+        return self._moneda_destino
 
-    @moneda_destino.setter  # Setter de moneda_destino
+    @moneda_destino.setter
     def moneda_destino(self, valor: str) -> None:
-        if not isinstance(valor, str) or not re.fullmatch(r"[A-Za-z]{3}", valor.strip()):  # Exige 3 letras ISO
-            raise ValueError("La moneda de destino debe ser un código ISO de 3 letras (ej. CLP, BRL, MXN).")
-        self._moneda_destino = valor.strip().upper()  # Guarda en mayúsculas estándar (ej. 'CLP')
+        if not isinstance(valor, str) or not re.fullmatch(r"[A-Za-z]{3}", valor.strip()):
+            raise ValueError("La moneda de destino debe ser un código ISO de 3 letras (ej. CLP).")
+        self._moneda_destino = valor.strip().upper()
 
-    @property  # Getter de monto_base
+    @property
     def monto_base(self) -> float:
-        return self._monto_base  # Retorna el monto base
+        return self._monto_base
 
-    @monto_base.setter  # Setter de monto_base
+    @monto_base.setter
     def monto_base(self, valor: float | int) -> None:
-        if not isinstance(valor, (int, float)) or float(valor) <= 0:  # Impide montos negativos o iguales a cero
-            raise ValueError("El monto base debe ser un número mayor a 0.")
-        self._monto_base = float(valor)  # Almacena como decimal
+        if (
+            isinstance(valor, bool)
+            or not isinstance(valor, (int, float))
+            or not math.isfinite(valor)
+            or not (0 < float(valor) <= self.MONTO_MAX)
+        ):
+            raise ValueError(f"El monto base debe ser un número finito mayor a 0 y hasta {self.MONTO_MAX:,.0f}.")
+        self._monto_base = float(valor)
 
-    @property  # Getter de tasa_cambio
+    @property
     def tasa_cambio(self) -> float:
-        return self._tasa_cambio  # Retorna el tipo de cambio aplicado
+        return self._tasa_cambio
 
-    @tasa_cambio.setter  # Setter de tasa_cambio
+    @tasa_cambio.setter
     def tasa_cambio(self, valor: float | int) -> None:
-        if not isinstance(valor, (int, float)) or float(valor) <= 0:  # Impide tasas inválidas <= 0
-            raise ValueError("La tasa de cambio debe ser un valor numérico mayor a 0.")
-        self._tasa_cambio = float(valor)  # Almacena como decimal
+        if isinstance(valor, bool) or not isinstance(valor, (int, float)) or not math.isfinite(valor) or float(valor) <= 0:
+            raise ValueError("La tasa de cambio debe ser un número finito mayor a 0.")
+        self._tasa_cambio = float(valor)
 
-    def __str__(self) -> str:  # Representación en texto legible para listados administrativos
-        emp_str = f"Emp #{self.id_empleado}" if self.id_empleado else "Sin empleado"  # Formatea empleado
-        proy_str = f"Proy #{self.id_proyecto}" if self.id_proyecto else "Sin proyecto"  # Formatea proyecto
+    @property
+    def fecha_tasa(self) -> str:
+        return self._fecha_tasa
+
+    @fecha_tasa.setter
+    def fecha_tasa(self, valor: str) -> None:
+        if not valor:
+            self._fecha_tasa = ""
+            return
+        try:
+            fecha_dt = datetime.strptime(valor.strip(), "%Y-%m-%d").date()
+            if fecha_dt > datetime.now().date():
+                raise ValueError("La fecha de la tasa no puede ser futura.")
+            self._fecha_tasa = valor.strip()
+        except ValueError as e:
+            raise ValueError("La fecha de la tasa debe tener formato válido AAAA-MM-DD.") from e
+
+    def __str__(self) -> str:
+        emp_str = f"Emp #{self.id_empleado}" if self.id_empleado else "Sin empleado"
+        proy_str = f"Proy #{self.id_proyecto}" if self.id_proyecto else "Sin proyecto"
+        fecha_txt = self.fecha_tasa or "Sin fecha oficial"
         return (
-            f"Pago #{self.id_pago or 'Nuevo'} | País: {self.pais_proyecto} ({emp_str} / {proy_str}) | "
+            f"Pago #{self.id_pago or 'Nuevo'} [{self.origen}] | País: {self.pais_proyecto} ({emp_str} / {proy_str}) | "
             f"{self.monto_base:,.2f} {self.moneda_origen} -> {self.monto_convertido:,.2f} {self.moneda_destino} "
-            f"(Tasa: {self.tasa_cambio:.4f} del {self.fecha_tasa})"
-        )  # Retorna ficha formateada del pago internacional
+            f"(Tasa: {self.tasa_cambio:.4f} del {fecha_txt})"
+        )

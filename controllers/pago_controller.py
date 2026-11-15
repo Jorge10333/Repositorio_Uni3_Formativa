@@ -1,102 +1,133 @@
-from views.pago_view import PagoView  # Importa la vista de pagos internacionales
-from services.divisa_service import DivisaService  # Importa el servicio que consulta Frankfurter API
-from models.pago_internacional import PagoInternacional  # Importa el modelo de dominio
-from models.pago_internacional_dao import PagoInternacionalDAO  # Importa el DAO de persistencia SQLite
-from models.usuario import Usuario  # Importa el modelo Usuario para auditar quién autorizó el pago
+import logging  # Registra fallos de la API de divisas en el archivo de log
+from controllers.seguridad import exigir_rol, exigir_sesion  # Control de permisos por rol
+from exceptions import (
+    ApiConexionError,
+    ApiDatosInvalidosError,
+    ApiHttpError,
+    ApiTimeoutError,
+    EcoTechError,
+    ValidacionError,
+)
+from models.empleado_dao import EmpleadoDAO  # Valida existencia del empleado beneficiario
+from models.pago_internacional import PagoInternacional  # Modelo con cálculo exacto Decimal
+from models.pago_internacional_dao import PagoInternacionalDAO  # Persistencia en SQLite
+from models.proyecto_dao import ProyectoDAO  # Valida existencia del proyecto asociado
+from models.usuario import Usuario
+from services.divisa_service import DivisaService  # Servicio externo Frankfurter API
+from views.pago_view import PagoView
+
+log = logging.getLogger(__name__)
 
 
-class PagoController:  # Define el controlador que orquesta el cálculo de pagos con tipo de cambio
-    """
-    Controlador para gestionar pagos internacionales ajustados por indicadores económicos.
-    """
+class PagoController:  # Coordina tipos de cambio y pagos internacionales (Admin y Gerente)
+    def __init__(self):
+        self.view = PagoView()
 
-    def __init__(self):  # Constructor del controlador
-        self.view = PagoView()  # Instancia la vista
-        self.service = DivisaService()  # Instancia el servicio externo
-        self.pago_dao = PagoInternacionalDAO()  # Instancia el DAO
-
-    def ejecutar(self, usuario_actual: Usuario | None = None) -> None:  # Bucle principal del submenú
-        while True:  # Mantiene activo el submenú hasta seleccionar 0
-            opcion = self.view.mostrar_menu()  # Muestra opciones y captura selección
+    def ejecutar(self, usuario_actual: Usuario) -> None:  # Restringe acceso a roles autorizados
+        exigir_rol(usuario_actual, "Administrador", "Gerente")
+        while True:
+            opcion = self.view.mostrar_menu()
             if opcion == 1:
-                self.consultar_tasa()  # Consulta puntual de tasa de cambio
+                self.consultar_tasa(usuario_actual)
             elif opcion == 2:
-                self.calcular_y_guardar_pago(usuario_actual)  # Calcula conversión y guarda en BD
+                self.calcular_y_guardar_pago(usuario_actual)
             elif opcion == 3:
-                self.listar_historial()  # Lista pagos guardados
+                self.listar_historial(usuario_actual)
             elif opcion == 4:
-                self.diagnosticar_conexion()  # Verifica conectividad con Frankfurter API
+                self.diagnosticar_conexion(usuario_actual)
             elif opcion == 0:
-                break  # Vuelve al menú principal
+                break
             else:
-                self.view.mostrar_error("Opción no válida. Intente nuevamente.")
+                self.view.mostrar_error("Opción no válida.")
 
-    def consultar_tasa(self) -> None:  # Consulta una tasa en tiempo real sin guardar en BD
-        origen, destino = self.view.pedir_par_monedas()  # Pide ambas monedas
-        try:  # Protege contra códigos inválidos o errores de red
-            tasa, fecha, mensaje = self.service.obtener_tasa_cambio(origen, destino)  # Llama al servicio
-            if tasa is not None:  # Si se obtuvo la tasa
-                self.view.mostrar_mensaje(mensaje)
-            else:
-                self.view.mostrar_error(mensaje)
-        except ValueError as e:  # Captura errores de formato ISO
+    def consultar_tasa(self, usuario_actual: Usuario) -> None:
+        exigir_rol(usuario_actual, "Administrador", "Gerente")
+        origen, destino = self.view.pedir_par_monedas()
+        try:
+            tasa, fecha = DivisaService.obtener_tasa_cambio(origen, destino)
+            self.view.mostrar_mensaje(f"Tasa oficial ({fecha}): 1 {origen} = {tasa:.4f} {destino}.")
+        except ValidacionError as e:
             self.view.mostrar_error(str(e))
+        except (ApiTimeoutError, ApiConexionError, ApiHttpError, ApiDatosInvalidosError) as e:
+            log.warning("Falla API Divisas (%s->%s): %s", origen, destino, e)
+            self.view.mostrar_error(str(e))
+            respaldo = DivisaService.obtener_tasa_respaldo(origen, destino)
+            if respaldo is not None:
+                self.view.mostrar_mensaje(f"[MODO CONTINGENCIA] Tasa referencial: 1 {origen} = {respaldo:.4f} {destino}.")
 
-    def calcular_y_guardar_pago(self, usuario_actual: Usuario | None = None) -> None:  # Calcula y guarda pago
-        datos = self.view.formulario_pago_internacional(self.service.sugerir_moneda_por_pais)
-        if not datos:  # Si el formulario fue cancelado o tuvo datos inválidos
+    def calcular_y_guardar_pago(self, usuario_actual: Usuario) -> None:
+        exigir_rol(usuario_actual, "Administrador", "Gerente")
+        datos = self.view.formulario_pago_internacional(DivisaService.sugerir_moneda_por_pais)
+        if not datos:
             return
 
-        try:  # Protege la consulta a la API y la creación del modelo
-            tasa, fecha_tasa, mensaje = self.service.obtener_tasa_cambio(
-                datos["moneda_origen"],
-                datos["moneda_destino"]
-            )  # Consulta la tasa actualizada en Frankfurter API
-            self.view.mostrar_mensaje(mensaje)  # Informa el origen de la tasa (online o contingencia)
+        try:
+            pais_valido = DivisaService.validar_pais(datos["pais_proyecto"])  # Exige país en catálogo
+            origen_dato = "API"
+            fecha_tasa = ""
 
-            if tasa is None:  # Si no se pudo obtener tasa ni de respaldo
-                return
+            try:
+                tasa, fecha_tasa = DivisaService.obtener_tasa_cambio(
+                    datos["moneda_origen"], datos["moneda_destino"]
+                )
+            except (ApiTimeoutError, ApiConexionError, ApiHttpError, ApiDatosInvalidosError) as e:
+                log.warning("Falla API Divisas al liquidar pago: %s", e)
+                self.view.mostrar_error(str(e))
+                tasa = DivisaService.obtener_tasa_respaldo(datos["moneda_origen"], datos["moneda_destino"])
+                if tasa is None:
+                    return
+                origen_dato = "contingencia"
 
-            # Instancia el objeto de dominio PagoInternacional (calcula automáticamente el total convertido)
             pago = PagoInternacional(
-                pais_proyecto=datos["pais_proyecto"],
+                pais_proyecto=pais_valido,
                 moneda_origen=datos["moneda_origen"],
                 moneda_destino=datos["moneda_destino"],
                 monto_base=datos["monto_base"],
                 tasa_cambio=tasa,
                 fecha_tasa=fecha_tasa,
+                origen=origen_dato,
                 id_empleado=datos["id_empleado"],
                 id_proyecto=datos["id_proyecto"],
-                id_usuario=usuario_actual.id_usuario if usuario_actual else None
+                id_usuario=usuario_actual.id_usuario,
             )
 
-            self.view.mostrar_detalle_conversion(pago)  # Muestra el resumen antes de guardar
+            self.view.mostrar_detalle_conversion(pago)  # Muestra el desglose calculado
 
-            if not self.view.confirmar_guardado():  # Pide confirmación al operador
-                self.view.mostrar_mensaje("Cálculo descartado; no se guardó en la base de datos.")
+            # Impide guardar pagos oficiales usando tasas de contingencia sin conexión
+            if pago.origen == "contingencia":
+                self.view.mostrar_error(
+                    "Los pagos calculados en modo contingencia son solo referenciales y no se guardan en BD."
+                )
                 return
 
-            id_generado = self.pago_dao.insertar(pago)  # Guarda en SQLite mediante el DAO
-            if id_generado:  # Si la inserción fue exitosa
-                pago.id_pago = id_generado
-                self.view.mostrar_mensaje(f"Pago internacional #{id_generado} registrado exitosamente en SQLite.")
+            if not self.view.confirmar_guardado():
+                self.view.mostrar_mensaje("Cálculo descartado.")
+                return
+
+            if pago.id_empleado is not None and not EmpleadoDAO.obtener_por_id(pago.id_empleado):
+                self.view.mostrar_error(f"El empleado #{pago.id_empleado} no existe en el sistema.")
+                return
+            if pago.id_proyecto is not None and not ProyectoDAO.obtener_por_id(pago.id_proyecto):
+                self.view.mostrar_error(f"El proyecto #{pago.id_proyecto} no existe en el sistema.")
+                return
+
+            id_generado = PagoInternacionalDAO.insertar(pago)
+            if id_generado:
+                self.view.mostrar_mensaje(f"Pago internacional #{id_generado} registrado con éxito.")
             else:
-                self.view.mostrar_error(
-                    "No se pudo guardar el pago (verifique que el ID de empleado o proyecto exista)."
-                )
-        except ValueError as e:  # Captura errores de validación del modelo
+                self.view.mostrar_error("No fue posible guardar el pago internacional.")
+
+        except (ValidacionError, ValueError) as e:
             self.view.mostrar_error(str(e))
-        except Exception as e:  # Captura cualquier error inesperado
-            self.view.mostrar_error(f"Error inesperado al calcular pago: {e}")
 
-    def listar_historial(self) -> None:  # Muestra todos los pagos guardados
-        pagos = self.pago_dao.listar_todos()  # Consulta SQLite
-        self.view.mostrar_historial(pagos)  # Imprime en consola
+    def listar_historial(self, usuario_actual: Usuario) -> None:
+        exigir_sesion(usuario_actual)
+        self.view.mostrar_historial(PagoInternacionalDAO.listar_todos())
 
-    def diagnosticar_conexion(self) -> None:  # Verifica el estado de Frankfurter API
-        self.view.mostrar_mensaje("Verificando conectividad con Frankfurter API...")
-        exito, detalle = self.service.probar_conectividad()
-        if exito:
+    def diagnosticar_conexion(self, usuario_actual: Usuario) -> None:
+        exigir_sesion(usuario_actual)
+        try:
+            _, detalle = DivisaService.probar_conectividad()
             self.view.mostrar_mensaje(f"[ONLINE] {detalle}")
-        else:
-            self.view.mostrar_error(f"[OFFLINE] {detalle}")
+        except EcoTechError as e:
+            self.view.mostrar_error(f"[OFFLINE] {e}")
