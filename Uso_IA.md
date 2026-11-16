@@ -1,58 +1,185 @@
 # Documentación de Uso Crítico de Herramientas de IA (Criterio 3.1.4)
 
-**Asignatura:** TI3021 — Programación Orientada a Objeto Seguro  
-**Proyecto:** EcoTech Solutions (Unidad 3)  
-**Integrantes:** Jorge Lagos, Sebastian San Martin.
+Asignatura: Programación Orientada a Objeto Seguro  
+Proyecto: EcoTech Solutions (Unidad 3)  
+Integrante: Jorge Lagos y Sebastian san Martin
 
 ---
 
 ## 1. Evidencia de Prompts y Componentes Generados (Indicador 3.1.4.I.13)
 
-## Proceso de Colaboración con IA y Metodología de Trabajo
+### Metodología de Trabajo con IA
 
-En el desarrollo de esta entrega (Unidad 3), la Inteligencia Artificial se utilizó como apoyo estructural y de aprendizaje guiado, siguiendo estas etapas:
-
-1. **Diagnóstico inicial y alineación con la Unidad 3:**  
-   Lo primero que se solicitó a la IA fue analizar nuestro proyecto base de la entrega anterior (EF2) y compararlo con los contenidos y estándares de la Unidad 3 (consumo seguro de APIs, cifrado de credenciales, validación de entradas y manejo de excepciones) para identificar qué módulos debíamos incorporar.
-
-2. **Integración guiada de las APIs externas (`Open-Meteo` y `Frankfurter API`):**  
-   Una vez seleccionada la API del clima (**Open-Meteo**), se pidió ayuda para integrarla respetando exactamente la estructura enseñada en la Unidad 3 (`requests.get`, *timeouts*, validación de JSON y bloques `try/except`), solicitando además comentarios y anotaciones detalladas en el código para comprender cada paso. Posteriormente, se replicó este mismo enfoque estructurado y comentado para integrar la segunda API de divisas (**Frankfurter API**).
-
-3. **Iteración, corrección de errores y reconstrucción desde la base:**  
-   Tras revisar el avance junto a mi compañero, elaboramos un listado de mejoras técnicas y de seguridad pendientes (reemplazar `SHA-256` por `scrypt` con sal, persistir el bloqueo de intentos fallidos en SQLite, ocultar contraseñas con `getpass`, usar `Decimal` en cálculos financieros y separar excepciones). En un primer intento de integración surgieron fallos de acoplamiento en el código, por lo que decidimos volver a partir desde la base limpia del proyecto e ir aplicando y probando cada mejora paso a paso hasta completar y auditar todo el sistema con Bandit.
-
-## 2. Análisis Técnico del Funcionamiento del Código (Indicador 3.1.4.I.14)
-
-1. **Consumo de APIs Externas (`services/clima_service.py` y `services/divisa_service.py`):**
-   * Siguiendo el esquema de la Unidad 3, cada servicio realiza peticiones HTTP con `requests.get(url, params=..., timeout=...)` evitando esperas indefinidas si un servidor externo no responde.
-   * **Open-Meteo:** Consulta primero las coordenadas de la ciudad mediante geocodificación y luego obtiene el clima actual extrayendo únicamente temperatura, humedad, velocidad del viento y código meteorológico desde el diccionario JSON.
-   * **Frankfurter API:** Consulta la tasa de cambio entre monedas ISO 4217, verifica que la respuesta JSON contenga una tasa numérica válida y positiva, y ante fallos de red activa un modo de contingencia referencial.
-
-2. **Autenticación Criptográfica y Control de Acceso (`models/usuario.py` y `controllers/seguridad.py`):**
-   * `encriptar_credencial()` genera 16 bytes aleatorios (`os.urandom(16)`) como sal única y deriva el hash con `hashlib.scrypt()`, guardándolo en formato `scrypt$<sal_hex>$<digest_hex>`.
-   * `verificar_credencial()` valida la contraseña usando `hmac.compare_digest()` para prevenir ataques de temporización (*timing attacks*).
-   * Los guardias `exigir_sesion()` y `exigir_rol()` verifican antes de cada operación en los controladores que exista sesión activa, que la cuenta no esté bloqueada y que el rol tenga permiso.
+1. Diagnóstico inicial: Comparación del proyecto base (EF2) con los estándares de la Unidad 3 (APIs seguras, cifrado, validación y excepciones).
+2. Integración de APIs: Implementación comentada de Open-Meteo y Frankfurter API con `requests.Session`, reintentos, timeouts y validación JSON.
+3. Refactorización por fases: Corrección paso a paso de vulnerabilidades (scrypt, bloqueo persistente en SQLite, `getpass`, `Decimal`, RBAC y `logging`) verificada con Bandit.
 
 ---
 
-## 3. Revisión por Rúbrica, Diagnóstico Inicial y Análisis Estático (Indicador 3.1.4.I.15)
+### Registro de Interacciones con IA (Capturas en `docs/evidencias_ia/`)
 
-Dado que cada módulo fue revisado y validado previamente con apoyo de IA antes de editar el código fuente, el análisis estático ejecutado con **Bandit** (`bandit -r . -x ./.venv`) **no arrojó vulnerabilidades ni alertas activas** en el repositorio. Sin embargo, al auditar la línea base del proyecto frente a los 16 indicadores de la rúbrica, se detectó una puntuación inicial de **60/100 puntos** (con insuficiencias en seguridad, validaciones, excepciones y ausencia de documentación de IA), identificándose las siguientes brechas a corregir:
+#### Interacción 1 — Diagnóstico Inicial
+* Fecha: 15/11/2026 | Herramienta: Google Gemini
+* Prompt:
+  > "para comensar con nuestro proyecto quiero que analizes el el material de estudio de la unidad 3 para definir una configuracion inicial y la evaluscion poo 2 para usarla de vase"
+* Respuesta: Definió variables de entorno en `config/settings.py`, cliente HTTP y estructura RBAC sobre la base EF2.
+* Archivos: `config/settings.py`, `config/logging_config.py`, `exceptions.py`, `.env.example`
+* Decisión: Modificado — Eliminé valores por defecto sensibles y exigí variables obligatorias con `_requerida()`.
+* Captura: [evidencia_01_diagnostico.png](docs/evidencias_ia/evidencia_01_diagnostico.png)
 
-1. **Criterios en nivel Elemental (3,6 pts — Indicadores 5 y 7):** El sistema utilizaba `SHA-256` sin sal para contraseñas, mantenía bloqueo de intentos solo en memoria RAM y exponía credenciales de ejemplo en `.env.example` junto con lectura visible en consola.
-2. **Criterios en nivel Competente (4,8 a 5,6 pts — Indicadores 1, 3, 4, 6, 8, 9, 11 y 12):** Se detectaron oportunidades de mejora en la validación de entradas numéricas (`.isdigit()` vulnerable a caracteres Unicode), precisión financiera con `float`, persistencia de tasas de contingencia sin conexión, manejo genérico de excepciones y diferenciación de códigos de estado HTTP.
-3. **Criterios en nivel Ausente (0/25 pts — Indicadores 13, 14, 15 y 16):** Faltaba la documentación formal del uso crítico de herramientas de IA, el análisis técnico del código asistido, el registro de correcciones y la justificación de refactorizaciones.
+#### Interacción 2 — Integración de APIs
+* Fecha: 15/11/2026 | Herramienta: Google Gemini
+* Prompt:
+  > "tomando como base a la eva poo 2 nececito que me ayudes a integrar las api de Open-Meteo y Frankfuster API, apegandoce a la estructura del ejemplo de la unidad 3 con validacion de JSON, con comentarios detallados en cada parte del codigo para entender lo que esta pasando"
+* Respuesta: Entregó `http_client.py` (`Session` + `Retry` + timeouts) y los servicios comentados para Open-Meteo y Frankfurter API.
+* Archivos: `services/http_client.py`, `services/clima_service.py`, `services/divisa_service.py`, `models/reporte_clima.py`, `models/pago_internacional.py`
+* Decisión: Modificado — Marqué respaldos offline como `"contingencia"` y bloqueé su guardado en BD.
+* Captura: [evidencia_02_apis_modelos.png](docs/evidencias_ia/evidencia_02_apis_modelos.png)
+
+#### Interacción 3 — Correcciones por Fases
+* Fecha: 15/11/2026 | Herramienta: Google Gemini
+* Prompt:
+  > "quiero que con las deficiencias que encontro mi compañero me ayudes a corregir el codigo paso a paso para no perderme"
+* Respuesta: Ordenó las mejoras en 9 fases: `getpass`, `scrypt` con sal, `hmac.compare_digest`, bloqueo persistente en SQLite, RBAC y validación de entradas.
+* Archivos: `models/usuario.py`, `models/usuario_dao.py`, `models/*_dao.py`, `controllers/seguridad.py`, `views/*.py`, `main.py`
+* Decisión: Modificado — Implementé `scrypt`, estandaricé excepciones `sqlite3.Error` en los DAO y reemplacé `.isdigit()` por `try/int`.
+* Captura: [evidencia_03_seguridad_dao.png](docs/evidencias_ia/evidencia_03_seguridad_dao.png)
+
+#### Interacción 4 — Auditoría con Bandit
+* Fecha: 15/11/2026 | Herramienta: Google Gemini
+* Prompt:
+  > "quiero que me ayudes a escaner todo el codigo en busca de errores y señalamelos, para corregirlos y comprovar con un bandit"
+* Respuesta: Identificó alertas `B105`, `B110`, `B113` y `B324`, y guió la auditoría comparativa antes/después con 0 hallazgos finales.
+* Archivos: `docs/bandit_antes.txt`, `docs/bandit_despues.txt`, `Uso_IA.md`, `README.md`
+* Decisión: Usado — Adjunté los reportes en `docs/` y documenté la matriz de hallazgos y refactorizaciones.
+* Captura: [evidencia_04_bandit.png](docs/evidencias_ia/evidencia_04_bandit.png)
 
 ---
 
-## 4. Refactorizaciones Aplicadas por Fases y Justificación Técnica (Indicador 3.1.4.I.16)
+## 2. Análisis Técnico del Código (Indicador 3.1.4.I.14)
 
-Para elevar todos los criterios al nivel **Experto (100/100 puntos)**, se ejecutó una refactorización ordenada por fases desde la base del proyecto:
+### 2.1. `config/settings.py`
+* Función: Carga variables desde `.env` (`load_dotenv()`) y valida las obligatorias con `_requerida()`.
+* Dependencias: `os`, `python-dotenv`.
+* Fallo: Detiene el arranque con error claro si falta una URL o parámetro obligatorio.
 
-| Fase | Área / Criterios | Corrección Implementada | Justificación de Ingeniería de Software |
-| :--- | :--- | :--- | :--- |
-| **Fase 0 - 1** | Línea base y datos sensibles (Criterios 7, 13, 15) | Auditoría con **Bandit**, limpieza de `.env.example`, carga segura en `config/settings.py` y creación interactiva del `Administrador` inicial con `getpass` (`views/auth_view.py`). | Elimina credenciales fijas en el repositorio y evita la exposición visual de contraseñas en consola. |
-| **Fase 2** | Autenticación y BD (Criterio 5) | Migración a `hashlib.scrypt` con sal aleatoria de 16 bytes (`models/usuario.py`), verificación `hmac.compare_digest` y bloqueo persistente en SQLite (`models/usuario_dao.py`, `config/database.py`). | Protege las credenciales frente a ataques de fuerza bruta y mantiene el bloqueo de 3 intentos / 5 minutos tras reiniciar el sistema. |
-| **Fase 3 - 4** | Validación y acceso (Criterios 6, 8) | Reemplazo de `.isdigit()` por `int()` en `try/except ValueError` (`views/utils.py`), validación ISO 4217 y guardias RBAC (`controllers/seguridad.py`, `controllers/auth_controller.py`). | Previene falsos positivos Unicode y garantiza que solo usuarios autenticados con el rol autorizado consuman las APIs. |
-| **Fase 5 - 6** | Cliente HTTP y excepciones (Criterios 1, 3, 9, 11) | Extracción filtrada en `services/clima_service.py` y `services/divisa_service.py`, jerarquía propia en `exceptions.py`, diferenciación de códigos HTTP (`4xx`/`5xx`) y bitácora en `config/logging_config.py`. | Aísla fallos de red, *timeouts* y respuestas HTTP inválidas sin mezclar errores técnicos con la lógica de negocio. |
-| **Fase 7 - 9** | Integración, mensajes y entrega (Criterios 4, 12, 13-16) | Cálculos exactos con `decimal.Decimal` (`models/pago_internacional.py`), bloqueo de guardado en modo contingencia offline, mensajes seguros en consola y documentación en `README.md` y `Uso_IA.md`. | Garantiza exactitud contable, continuidad operativa sin contaminar la base de datos y trazabilidad completa de la entrega. |
+### 2.2. `services/http_client.py`
+* Función: Centraliza peticiones HTTP con `requests.Session`, reintentos (`Retry` en 429/5xx para `GET`) y timeout `(3.05, timeout)`.
+* Dependencias: `requests`, `urllib3`, `exceptions.py`.
+* Fallo: Convierte errores de red, JSON inválido o códigos `4xx`/`5xx` en excepciones propias (`ApiTimeoutError`, `ApiConexionError`, `ApiHttpError`, `ApiRespuestaInvalidaError`).
+
+### 2.3. `services/clima_service.py` y `services/divisa_service.py`
+* Función: Consumen `obtener_json()`. Clima geocodifica la ciudad y extrae temperatura, humedad, viento y `weather_code`; divisas valida ISO 4217 y obtiene la tasa en Frankfurter API.
+* Dependencias: `http_client.py`, `reporte_clima.py`, `pago_internacional.py`, `settings.py`, `exceptions.py`.
+* Fallo: Activan respaldo marcado como `origen = "contingencia"` y registran el fallo en el log.
+
+### 2.4. `models/reporte_clima.py` y `models/pago_internacional.py`
+* Función: Validan rangos físicos y finitud (`math.isfinite()`), generan alertas climáticas (`evaluar_condiciones()`) y calculan divisas con `Decimal` (`ROUND_HALF_UP`).
+* Dependencias: `decimal`, `math`, `re`, `exceptions.py`.
+* Fallo: Rechazan `NaN`, `Inf` o valores fuera de rango lanzando `ValidacionError`.
+
+### 2.5. `models/usuario.py`, `controllers/seguridad.py` y `models/usuario_dao.py`
+* Función: Cifran claves con `hashlib.scrypt` + sal de 16 bytes, comparan con `hmac.compare_digest()`, exigen sesión/rol (`exigir_sesion`, `exigir_rol`) y ejecutan SQL parametrizado (`?`) en SQLite.
+* Dependencias: `hashlib`, `hmac`, `os`, `sqlite3`, `datetime`, `logging`, `database.py`.
+* Fallo: Bloquean la cuenta por 5 minutos tras 3 intentos fallidos (persistido en BD) y capturan `sqlite3.Error` sin exponer trazas.
+
+### 2.6. `exceptions.py`, `config/logging_config.py` y `main.py`
+* Función: Separan excepciones de negocio (`AppError`) de detalles técnicos guardados en `logs/ecotech.log` mediante `RotatingFileHandler`.
+* Dependencias: `logging`, `main_controller.py`, `seguridad.py`, `getpass`.
+* Fallo: `main.py` captura `KeyboardInterrupt`, `EOFError` y errores inesperados cerrando de forma segura.
+
+### 2.7. Dependencias
+* Externas: `requests` (sesiones HTTP), `urllib3` (reintentos `Retry`), `python-dotenv` (lectura `.env`).
+* Estándar: `hashlib`/`hmac` (scrypt), `decimal`/`math` (cálculo exacto), `sqlite3` (BD), `logging` (bitácora), `re`/`getpass` (validación y lectura oculta).
+
+---
+
+## 3. Hallazgos y Auditoría Estática (Indicador 3.1.4.I.15)
+
+### 3.1. Resultados Bandit
+* Antes: [`docs/bandit_antes.txt`](docs/bandit_antes.txt)
+* Después: [`docs/bandit_despues.txt`](docs/bandit_despues.txt) (0 vulnerabilidades detectadas).
+
+### 3.2. Hallazgos Corregidos
+
+1. Contraseña `admin1234` en código y pantalla (`settings.py` l.24, `auth_view.py` l.16) — Riesgo: Alto — Corregido con `.env` y `getpass`.
+2. Hash `SHA-256` sin sal y clave de 4 caracteres (`usuario.py` l.69-91) — Riesgo: Alto — Corregido con `scrypt` + sal y política de 10-128 caracteres.
+3. Gestión de usuarios sin RBAC (`main_controller.py` l.34-35) — Riesgo: Alto — Corregido con `exigir_rol("Administrador")`.
+4. Controladores permitían `usuario=None` (`clima_controller.py` l.17, `pago_controller.py` l.18) — Riesgo: Medio — Corregido con `exigir_sesion`.
+5. Bloqueo de intentos solo en RAM (`auth_controller.py` l.15-47) — Riesgo: Medio — Corregido persistiendo bloqueo en SQLite.
+6. Aceptación de `nan` e `inf` en montos (`pago_view.py` l.49-52) — Riesgo: Medio — Corregido con `math.isfinite()` y `Decimal`.
+7. Uso de `.isdigit()` + `int()` vulnerable a Unicode (`auth_view.py`, `pago_view.py`, `clima_view.py`) — Riesgo: Medio — Corregido con `try/int` en login, clima y pagos.
+8. Respaldos offline guardados como reales en BD (`divisa_service.py` l.129, `clima_service.py` l.128) — Riesgo: Alto — Corregido etiquetando `"contingencia"` y bloqueando guardado.
+9. `except Exception` y `{e}` mostrados en consola (`controllers/`, `services/`, `*_dao.py`) — Riesgo: Medio — Corregido con jerarquía `AppError` y `logging`.
+10. Códigos HTTP sin diferenciar `4xx`/`5xx` (`clima_service.py`, `divisa_service.py`) — Riesgo: Medio — Corregido en `http_client.py`.
+11. Clima sin humedad ni estado meteorológico (`clima_service.py` l.94-99) — Riesgo: Medio — Corregido extrayendo todos los campos requeridos.
+12. Cálculos financieros con `float` (`pago_internacional.py`) — Riesgo: Medio — Corregido con `Decimal` (`ROUND_HALF_UP`).
+13. Servicios retornaban tuplas `(dato, mensaje)` (`clima_service.py`, `divisa_service.py`) — Riesgo: Medio — Corregido retornando objetos o lanzando excepciones.
+14. Peticiones HTTP sin `Session` y cabeceras duplicadas (`clima_service.py`, `divisa_service.py`) — Riesgo: Bajo — Corregido con `Session` compartida y `Retry`.
+
+---
+
+## 4. Refactorizaciones y Justificación (Indicador 3.1.4.I.16)
+
+### Resumen por Fases
+* Fases 0-1 (Criterios 7, 13, 15): Auditoría Bandit, `.env` sin secretos y creación de admin con `getpass` para evitar credenciales fijas.
+* Fase 2 (Criterio 5): `hashlib.scrypt` con sal, `hmac.compare_digest` y bloqueo persistente en SQLite contra fuerza bruta.
+* Fases 3-4 (Criterios 6, 8): Validación `try/int`, ISO 4217 y guardias RBAC para restringir acceso a APIs y usuarios.
+* Fases 5-6 (Criterios 1, 3, 9, 11): Filtrado JSON, excepciones tipadas por código HTTP (`4xx`/`5xx`) y bitácora en `logs/ecotech.log`.
+* Fases 7-9 (Criterios 4, 12, 13-16): Cálculos con `Decimal`, bloqueo de guardado en contingencia y mensajes seguros sin trazas.
+
+### Decisiones sobre Código Asistido (USAR, MODIFICAR, DESCARTAR)
+
+#### 4.1. Hash de contraseñas — MODIFICAR
+* ANTES:
+  ```python
+  return hashlib.sha256(clave_limpia.encode("utf-8")).hexdigest()
+  ```
+* DESPUÉS:
+  ```python
+  digest = hashlib.scrypt(clave.encode("utf-8"), salt=os.urandom(16), n=2**14, r=8, p=1, dklen=32)
+  ```
+* Por qué: SHA-256 es rápido y sin sal (hashes iguales para claves iguales); scrypt exige memoria/tiempo y la sal hace único cada hash.
+* Ref.: OWASP Password Storage Cheat Sheet; `hashlib.scrypt`.
+
+#### 4.2. Cálculos de dinero — MODIFICAR
+* ANTES:
+  ```python
+  round(self._monto_base * self._tasa_cambio, 2)
+  ```
+* DESPUÉS:
+  ```python
+  (Decimal(str(monto)) * Decimal(str(tasa))).quantize(cuanto, rounding=ROUND_HALF_UP)
+  ```
+* Por qué: `float` no representa decimales exactos; `Decimal` da resultados contables previsibles.
+* Ref.: Documentación oficial de Python — Módulo `decimal`.
+
+#### 4.3. Errores de API — MODIFICAR
+* ANTES:
+  ```python
+  return (None, "", f"Servicio no disponible (HTTP {respuesta.status_code}).")
+  ```
+* DESPUÉS:
+  ```python
+  raise ApiHttpError(resp.status_code, "El servicio externo no está disponible por ahora.")
+  ```
+* Por qué: Separa éxito y fallo, permite capturar por tipo y registrar el detalle en el log.
+* Ref.: OWASP Top 10 (A09:2021 Security Logging and Monitoring Failures).
+
+#### 4.4. Pagos con tasa de respaldo — DESCARTAR el guardado
+* DESPUÉS:
+  ```python
+  if pago.origen == "contingencia":
+      mostrar_error("...no se guardan en BD.")
+      return
+  ```
+* Por qué: Una tasa antigua escrita a mano en un registro contable rompe la integridad de los datos.
+* Ref.: OWASP Top 10 (A08:2021 Software and Data Integrity Failures).
+
+#### 4.5. SQL parametrizado — USAR
+* Implementación:
+  ```python
+  cursor.execute("... WHERE nombreUsuario = ?", (valor,))
+  ```
+* Por qué: El valor viaja separado de la sentencia y evita inyección SQL.
+* Ref.: OWASP SQL Injection Prevention Cheat Sheet; `sqlite3`.
