@@ -1,6 +1,10 @@
 from sqlite3 import Cursor
 from config.database import Database
 from .departamento import Departamento
+import logging
+import sqlite3
+
+log = logging.getLogger(__name__)
 
 class DepartamentoDAO:
     """
@@ -19,8 +23,11 @@ class DepartamentoDAO:
             conn.commit()
             departamento.id_departamento = cursor.lastrowid
             return True
-        except Exception as e:
-            print(f"Error al crear departamento en BD: {e}")
+        except sqlite3.IntegrityError as e:
+            log.warning("Departamento no creado (restricción de BD): %s", e)
+            return False
+        except sqlite3.Error as e:
+            log.error("Error al crear departamento en BD: %s", e)
             return False
         finally:
             conn.close()
@@ -36,8 +43,8 @@ class DepartamentoDAO:
             filas = cursor.fetchall()
             for fila in filas:
                 departamentos.append(Departamento(fila['nombre'], fila['id_gerente'], fila['id_departamento']))
-        except Exception as e:
-            print(f"Error al obtener departamentos: {e}")
+        except sqlite3.Error as e:
+            log.error("Error al obtener departamentos: %s", e)
         finally:
             conn.close()
         return departamentos
@@ -53,8 +60,8 @@ class DepartamentoDAO:
             fila = cursor.fetchone()
             if fila:
                 departamento = Departamento(fila['nombre'], fila['id_gerente'], fila['id_departamento'])
-        except Exception as e:
-            print(f"Error al obtener el departamento: {e}")
+        except sqlite3.Error as e:
+            log.error("Error al obtener el departamento: %s", e)
         finally:
             conn.close()
         return departamento
@@ -73,8 +80,11 @@ class DepartamentoDAO:
             )
             conn.commit()
             return cursor.rowcount > 0
-        except Exception as e:
-            print(f"Error al actualizar departamento: {e}")
+        except sqlite3.IntegrityError as e:
+            log.warning("Departamento no actualizado (restricción de BD): %s", e)
+            return False
+        except sqlite3.Error as e:
+            log.error("Error al actualizar departamento: %s", e)
             return False
         finally:
             conn.close()
@@ -88,8 +98,11 @@ class DepartamentoDAO:
             cursor.execute("DELETE FROM departamento WHERE id_departamento = ?", (id_departamento,))
             conn.commit()
             return cursor.rowcount > 0
-        except Exception as e:
-            print(f"Error al eliminar departamento: {e}")
+        except sqlite3.IntegrityError as e:
+            log.warning("Departamento no eliminado (restricción de BD): %s", e)
+            return False
+        except sqlite3.Error as e:
+            log.error("Error al eliminar departamento: %s", e)
             return False
         finally:
             conn.close()

@@ -1,7 +1,11 @@
+import logging
+import sqlite3
 from sqlite3 import Cursor
 from config.database import Database
 from .empleado import Empleado
 from .departamento_dao import DepartamentoDAO
+
+log = logging.getLogger(__name__)
 
 class EmpleadoDAO:
     """
@@ -32,8 +36,11 @@ class EmpleadoDAO:
             conn.commit()
             empleado.id_unico = cursor.lastrowid
             return True
-        except Exception as e:
-            print(f"Error al crear empleado en BD: {e}")
+        except sqlite3.IntegrityError as e:
+            log.warning("Empleado no creado (restricción de BD): %s", e)
+            return False
+        except sqlite3.Error as e:
+            log.error("Error al crear empleado en BD: %s", e)
             return False
         finally:
             conn.close()
@@ -63,8 +70,8 @@ class EmpleadoDAO:
                         id_unico=fila['idUnico']
                     )
                 )
-        except Exception as e:
-            print(f"Error al obtener empleados: {e}")
+        except sqlite3.Error as e:
+            log.error("Error al obtener empleados: %s", e)
         finally:
             conn.close()
         return empleados
@@ -92,8 +99,8 @@ class EmpleadoDAO:
                     departamento=depto,
                     id_unico=fila['idUnico']
                 )
-        except Exception as e:
-            print(f"Error al obtener empleado por ID: {e}")
+        except sqlite3.Error as e:
+            log.error("Error al obtener empleado por ID: %s", e)
         finally:
             conn.close()
         return empleado
@@ -126,8 +133,11 @@ class EmpleadoDAO:
             )
             conn.commit()
             return cursor.rowcount > 0
-        except Exception as e:
-            print(f"Error al actualizar empleado: {e}")
+        except sqlite3.IntegrityError as e:
+            log.warning("Empleado no actualizado (restricción de BD): %s", e)
+            return False
+        except sqlite3.Error as e:
+            log.error("Error al actualizar empleado: %s", e)
             return False
         finally:
             conn.close()
@@ -141,8 +151,11 @@ class EmpleadoDAO:
             cursor.execute("DELETE FROM empleado WHERE idUnico = ?", (id_unico,))
             conn.commit()
             return cursor.rowcount > 0
-        except Exception as e:
-            print(f"Error al eliminar empleado: {e}")
+        except sqlite3.IntegrityError as e:
+            log.warning("Empleado no eliminado (restricción de BD): %s", e)
+            return False
+        except sqlite3.Error as e:
+            log.error("Error al eliminar empleado: %s", e)
             return False
         finally:
             conn.close()

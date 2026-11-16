@@ -2,6 +2,9 @@ import sqlite3
 from sqlite3 import Cursor
 from config.database import Database
 from .registro_tiempo import RegistroTiempo  # Importación corregida
+import logging
+
+log = logging.getLogger(__name__)
 
 class RegistroTiempoDAO:
     """
@@ -29,8 +32,11 @@ class RegistroTiempoDAO:
             conn.commit()
             registro.id_registro = cursor.lastrowid
             return True
+        except sqlite3.IntegrityError as e:
+            log.warning("Registro de tiempo no creado (restricción de BD): %s", e)
+            return False
         except sqlite3.Error as e:
-            print(f"Error al registrar tiempo en BD: {e}")
+            log.error("Error al registrar tiempo en BD: %s", e)
             return False
         finally:
             if conn:
@@ -57,7 +63,7 @@ class RegistroTiempoDAO:
                     )
                 )
         except sqlite3.Error as e:
-            print(f"Error al obtener registros de tiempo por empleado: {e}")
+            log.error("Error al obtener registros de tiempo por empleado: %s", e)
         finally:
             if conn:
                 conn.close()
@@ -72,8 +78,11 @@ class RegistroTiempoDAO:
             cursor.execute("DELETE FROM registro_tiempo WHERE id_registro = ?", (id_registro,))
             conn.commit()
             return cursor.rowcount > 0
+        except sqlite3.IntegrityError as e:
+            log.warning("Registro de tiempo no eliminado (restricción de BD): %s", e)
+            return False
         except sqlite3.Error as e:
-            print(f"Error al eliminar registro de tiempo: {e}")
+            log.error("Error al eliminar registro de tiempo: %s", e)
             return False
         finally:
             if conn:

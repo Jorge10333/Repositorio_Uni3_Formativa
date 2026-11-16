@@ -1,6 +1,10 @@
 from sqlite3 import Cursor
 from config.database import Database
 from .proyecto import Proyecto
+import logging
+import sqlite3
+
+log = logging.getLogger(__name__)
 
 class ProyectoDAO:
     """
@@ -19,8 +23,11 @@ class ProyectoDAO:
             conn.commit()
             proyecto.id_proyecto = cursor.lastrowid
             return True
-        except Exception as e:
-            print(f"Error al crear proyecto: {e}")
+        except sqlite3.IntegrityError as e:
+            log.warning("Proyecto no creado (restricción de BD): %s", e)
+            return False
+        except sqlite3.Error as e:
+            log.error("Error al crear proyecto en BD: %s", e)
             return False
         finally:
             conn.close()
@@ -43,8 +50,8 @@ class ProyectoDAO:
                         id_proyecto=fila['id_proyecto']
                     )
                 )
-        except Exception as e:
-            print(f"Error al obtener proyectos: {e}")
+        except sqlite3.Error as e:
+            log.error("Error al obtener proyectos: %s", e)
         finally:
             conn.close()
         return proyectos
@@ -65,8 +72,8 @@ class ProyectoDAO:
                     fecha_inicio=fila['fechaInicio'],
                     id_proyecto=fila['id_proyecto']
                 )
-        except Exception as e:
-            print(f"Error al obtener proyecto por ID: {e}")
+        except sqlite3.Error as e:
+            log.error("Error al obtener proyecto: %s", e)
         finally:
             conn.close()
         return proyecto
@@ -85,8 +92,11 @@ class ProyectoDAO:
             )
             conn.commit()
             return cursor.rowcount > 0
-        except Exception as e:
-            print(f"Error al actualizar proyecto: {e}")
+        except sqlite3.IntegrityError as e:
+            log.warning("Proyecto no actualizado (restricción de BD): %s", e)
+            return False
+        except sqlite3.Error as e:
+            log.error("Error al actualizar proyecto: %s", e)
             return False
         finally:
             conn.close()
@@ -100,8 +110,11 @@ class ProyectoDAO:
             cursor.execute("DELETE FROM proyecto WHERE id_proyecto = ?", (id_proyecto,))
             conn.commit()
             return cursor.rowcount > 0
-        except Exception as e:
-            print(f"Error al eliminar proyecto: {e}")
+        except sqlite3.IntegrityError as e:
+            log.warning("Proyecto no eliminado (restricción de BD): %s", e)
+            return False
+        except sqlite3.Error as e:
+            log.error("Error al eliminar proyecto: %s", e)
             return False
         finally:
             conn.close()

@@ -2,6 +2,10 @@ import sqlite3
 from sqlite3 import Cursor
 from config.database import Database
 from .empleado_proyecto import EmpleadoProyecto  # Importación corregida
+import logging
+import sqlite3
+
+log = logging.getLogger(__name__)
 
 class EmpleadoProyectoDAO:
     """
@@ -20,8 +24,11 @@ class EmpleadoProyectoDAO:
             conn.commit()
             asignacion.id_empleado_proyecto = cursor.lastrowid
             return True
+        except sqlite3.IntegrityError as e:
+            log.warning("Asignación no creada (restricción de BD): %s", e)
+            return False
         except sqlite3.Error as e:
-            print(f"Error al asignar empleado a proyecto en BD: {e}")
+            log.error("Error al asignar empleado a proyecto en BD: %s", e)
             return False
         finally:
             if conn:
@@ -39,8 +46,11 @@ class EmpleadoProyectoDAO:
             )
             conn.commit()
             return cursor.rowcount > 0
+        except sqlite3.IntegrityError as e:
+            log.warning("Asignación no eliminada (restricción de BD): %s", e)
+            return False
         except sqlite3.Error as e:
-            print(f"Error al desasignar empleado del proyecto: {e}")
+            log.error("Error al desasignar empleado del proyecto: %s", e)
             return False
         finally:
             if conn:
