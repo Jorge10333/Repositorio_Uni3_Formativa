@@ -67,7 +67,7 @@ class Usuario:  # Modelo de dominio para la entidad Usuario con hash scrypt con 
         self._rol = rol_limpio
 
     @staticmethod
-    def validar_politica_clave(clave: str) -> None:  # Exige 10-128 caracteres mezclando letras y números
+    def validar_politica_clave(clave: str) -> None:  # Exige 8-128 caracteres mezclando letras y números
         if not isinstance(clave, str) or not clave.strip():  # No hace .strip() para respetar espacios reales
             raise ValueError("La contraseña no puede estar vacía ni ser solo espacios.")
         if not (8 <= len(clave) <= 128):

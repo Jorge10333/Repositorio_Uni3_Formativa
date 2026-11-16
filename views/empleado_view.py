@@ -1,4 +1,4 @@
-from views.utils import leer_numero, leer_float, confirmar
+from views.utils import leer_numero, leer_float, confirmar, leer_id_opcional
 from models.empleado import Empleado
 from models.departamento import Departamento
 
@@ -31,8 +31,7 @@ class EmpleadoView:
         for dep in departamentos:
             print(f" [{dep.id_departamento}] - {dep.nombre}")
         
-        id_depto_input = input("Seleccione ID de Departamento (Enter para ninguno): ").strip()
-        id_departamento = int(id_depto_input) if id_depto_input.isdigit() else None
+        id_departamento = leer_id_opcional("Seleccione ID de Departamento (Enter para ninguno): ")
 
         return {
             "nombre": nombre,
@@ -91,13 +90,10 @@ class EmpleadoView:
             print(f" [{dep.id_departamento}] - {dep.nombre}")
         
         depto_actual_id = empleado.departamento.id_departamento if empleado.departamento else "Ninguno"
-        id_depto_input = input(f"ID Departamento actual ({depto_actual_id}): ").strip()
-        
-        if not id_depto_input:
+        id_departamento = leer_id_opcional(f"ID Departamento actual ({depto_actual_id}, Enter = mantener): ")
+        if id_departamento is None:
             id_departamento = empleado.departamento.id_departamento if empleado.departamento else None
-        else:
-            id_departamento = int(id_depto_input) if id_depto_input.isdigit() else None
-
+        
         return {
             "nombre": nuevo_nombre,
             "direccion": nueva_direccion,

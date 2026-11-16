@@ -1,4 +1,4 @@
-from views.utils import leer_numero, confirmar
+from views.utils import leer_numero, confirmar, leer_id_opcional
 from models.departamento import Departamento
 
 class DepartamentoView:
@@ -24,8 +24,7 @@ class DepartamentoView:
         # Recoge la información enviada por consola para crear un departamento
         print("\n--- Agregar Nuevo Departamento ---")
         nombre = input("Ingrese el nombre del departamento: ")
-        gerente_input = input("ID del Gerente Asignado (Enter si no aplica): ").strip()
-        id_gerente = int(gerente_input) if gerente_input.isdigit() else None
+        id_gerente = leer_id_opcional("ID del Gerente Asignado (Enter si no aplica): ")
         
         return {
             "nombre": nombre,
@@ -63,12 +62,9 @@ class DepartamentoView:
             nuevo_nombre = departamento.nombre
             
         gerente_actual_str = departamento.id_gerente if departamento.id_gerente is not None else "Ninguno"
-        nuevo_gerente_input = input(f"ID Gerente actual ({gerente_actual_str}): ").strip()
-        
-        if not nuevo_gerente_input:
+        nuevo_id_gerente = leer_id_opcional(f"ID Gerente actual ({gerente_actual_str}, Enter = mantener): ")
+        if nuevo_id_gerente is None:
             nuevo_id_gerente = departamento.id_gerente
-        else:
-            nuevo_id_gerente = int(nuevo_gerente_input) if nuevo_gerente_input.isdigit() else None
 
         return {
             "id_departamento": departamento.id_departamento,
